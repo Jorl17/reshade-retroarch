@@ -58,6 +58,24 @@ jobs:
         shell: bash
         run: python tests/ci_deps.py out/ci-deps
 
+      # librashader.dll needs D3DX9_43.dll from Microsoft's DirectX End-User Runtime (June
+      # 2010), which this machine does not have. The installer is checked to be signed by
+      # Microsoft (Microsoft publishes no checksum for it).
+      - name: Install the DirectX End-User Runtime (June 2010)
+        shell: pwsh
+        run: |
+          $exe = "out\ci-deps\downloads\directx_Jun2010_redist.exe"
+          if (-not (Test-Path $exe)) {
+            Invoke-WebRequest "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe" -OutFile $exe
+          }
+          $sig = Get-AuthenticodeSignature $exe
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") {
+            throw "unexpected signature on ${exe}: $($sig.Status) $($sig.SignerCertificate.Subject)"
+          }
+          Start-Process $exe -ArgumentList "/Q", "/T:$PWD\out\dxredist" -Wait
+          Start-Process "out\dxredist\DXSETUP.exe" -ArgumentList "/silent" -Wait
+          if (-not (Test-Path "$env:windir\System32\D3DX9_43.dll")) { throw "D3DX9_43.dll was not installed" }
+
       # Windows' own OpenGL is version 1.1 without a GPU driver. Register Mesa's OpenGL
       # driver as the system's OpenGL driver, as mesa-dist-win's system-wide deployment tool
       # does (bin/systemwidedeploy.cmd, bin/modules/reggl.cmd). Only on this CI machine.
