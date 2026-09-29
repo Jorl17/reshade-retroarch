@@ -139,6 +139,8 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 - Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
 - On Direct3D 12, librashader renders some presets slightly differently from the other
   APIs, so they can look a little different there (crt-royale's glow, for example).
+- On Vulkan, each time a preset is loaded again (for example after changing it), a little
+  GPU memory is not given back until the game closes (a librashader bug).
 - No HDR content (see FAQ).
 - Automatic detection needs sharp pixels. For smoothly upscaled games, use **Fixed**.
 - Bezel shaders only cover the game area.
@@ -164,6 +166,20 @@ fetches the pinned `librashader.dll`.
 | `out/build/files_test`, `out/build/params_test` | Preset files, discovery, saving parameters. |
 | `python tests/e2e.py ...` | The add-on inside real ReShade (needs a GPU). |
 | `python tests/compat_sweep.py ...` | Loads every preset in a shader folder. |
+
+### Vulkan validation layer
+
+`tests/e2e.py --vulkan-validation <folder>` also checks every Vulkan call with Khronos'
+validation layer, which reports Vulkan mistakes that drivers let through. The layer
+comes with the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home). To get it without
+installing anything, run the SDK installer with `copy_only=1`; it then only copies the
+files:
+
+```
+vulkansdk-windows-X64-1.4.363.0.exe --root C:\VulkanSDK\1.4.363.0 --accept-licenses --default-answer --confirm-command install copy_only=1
+```
+
+Then pass `--vulkan-validation C:\VulkanSDK\1.4.363.0\Bin`.
 
 [docs/assumptions.md](docs/assumptions.md) lists what the add-on relies on in ReShade,
 librashader and the graphics APIs beyond what they document, and how each is checked.

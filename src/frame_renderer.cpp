@@ -449,6 +449,8 @@ format FrameRenderer::native_format() const
 // each view) so it can be read as plain values even when the frame is sRGB; copies
 // between a typed and a typeless texture of the same family are allowed. Direct3D 9 has
 // no typeless formats (and handles sRGB elsewhere), so there it has the frame's format.
+// It is copied into (from the frame) and out of (by the grid detector, detector.h); Vulkan
+// requires both uses to be declared.
 bool FrameRenderer::ensure_snapshot(const resource_desc &frame, std::string &error)
 {
     if (snap_.handle != 0 && snap_w_ == frame.texture.width && snap_h_ == frame.texture.height &&
@@ -456,7 +458,8 @@ bool FrameRenderer::ensure_snapshot(const resource_desc &frame, std::string &err
         return true;
     destroy(snap_, snap_srv_, snap_unused_);
     const resource_desc desc(frame.texture.width, frame.texture.height, 1, 1, copy_format(frame.texture.format), 1,
-                             memory_heap::default_, resource_usage::shader_resource | resource_usage::copy_dest);
+                             memory_heap::default_,
+                             resource_usage::shader_resource | resource_usage::copy_dest | resource_usage::copy_source);
     if (!device_->create_resource(desc, nullptr, resource_usage::shader_resource, &snap_) ||
         !device_->create_resource_view(snap_, resource_usage::shader_resource,
                                        resource_view_desc(format_to_default_typed(frame.texture.format, 0)), &snap_srv_))

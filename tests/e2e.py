@@ -4,6 +4,7 @@
                         --shaders <folder with slang presets> --preset <preset path inside it>
                         --native <native frame .png, e.g. 424x240>
                         [--apis d3d11,d3d12,...] [--build out/build] [--work out/e2e]
+                        [--vulkan-validation <folder with VkLayer_khronos_validation.json>]
 
 The "game" is the test host (testhost/, a stand-in that shows PNG pictures through the
 chosen graphics API without changing a pixel). For each API, ReShade is installed next
@@ -38,10 +39,16 @@ every frame must be left untouched and ReShade.log must say why.
 
 The only effect file installed is the placeholder RetroArchShaders.fx, which also
 checks that the add-on runs when no other ReShade effects are present.
+
+With --vulkan-validation, the Vulkan run also loads Khronos' validation layer (from the
+Vulkan SDK) below ReShade, so it checks every Vulkan call that reaches the driver, and
+fails if it reports an error, apart from two known ones that are not the add-on's (see
+validation_errors()).
 """
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -78,6 +85,36 @@ RESHADE_NAME = {"d3d9": "d3d9.dll", "d3d10": "d3d10.dll", "d3d11": "d3d11.dll", 
 # that frames stay untouched must match byte for byte on every API.
 ROUNDING_MEAN = 0.5
 ROUNDING_FRACTION = 1e-3
+
+
+# Validation layer messages that are not the add-on's (checked by running without it):
+# ReShade 6.8 calls vkGetPrivateData on images the layer considers invalid, with or
+# without any add-on. Muted.
+RESHADE_VALIDATION_ERROR = "VUID-vkGetPrivateData-objectHandle-09498"
+# librashader 0.12 does not destroy some Vulkan objects when a chain is freed: per shader
+# pass its render pass, pipeline layout, descriptor set layout, descriptor pool and sets,
+# and the image and view of each look-up texture. They show up as leaks when the device is
+# destroyed. Accepted only if every leaked object is of these kinds and images and views
+# come in pairs; anything else (e.g. the add-on's command pool, fences, or its native
+# picture, which has two views) still fails.
+LIBRASHADER_LEAK_KINDS = {"VkRenderPass", "VkPipelineLayout", "VkDescriptorSetLayout", "VkDescriptorPool",
+                          "VkDescriptorSet", "VkImage", "VkImageView"}
+
+
+def validation_errors(text):
+    """The validation layer's errors in `text` (its log) that are the add-on's to answer
+    for, as a list of their first lines: all errors, except leak reports made only of
+    librashader's known leaks (see LIBRASHADER_LEAK_KINDS)."""
+    errors = []
+    for block in text.split("Validation Error: ")[1:]:
+        if "VUID-vkDestroyDevice-device-05137" in block:
+            # The leaked objects are listed between these two sentences.
+            listed = block.split("that have not been destroyed.", 1)[-1].split("The Vulkan spec states", 1)[0]
+            kinds = re.findall(r"\b(Vk[A-Za-z]+) 0x[0-9a-f]+", listed)
+            if kinds and set(kinds) <= LIBRASHADER_LEAK_KINDS and kinds.count("VkImage") == kinds.count("VkImageView"):
+                continue
+        errors.append(block.splitlines()[0])
+    return errors
 
 
 def load(path):
@@ -214,7 +251,19 @@ def install(args, api, work, common):
                           "description": "ReShade (test)"}}
     with open(os.path.join(work, "VkLayer_reshade.json"), "w") as f:
         json.dump(manifest, f)
-    return {"VK_ADD_LAYER_PATH": work, "VK_INSTANCE_LAYERS": "VK_LAYER_reshade"}
+    env = {"VK_ADD_LAYER_PATH": work, "VK_INSTANCE_LAYERS": "VK_LAYER_reshade"}
+    if args.vulkan_validation:
+        # The validation layer goes after ReShade in the list: further from the game, so it
+        # sees the calls ReShade and the add-on make too. Its messages go to a log file per
+        # run of the host (see host() in run_api).
+        env["VK_ADD_LAYER_PATH"] = work + os.pathsep + os.path.abspath(args.vulkan_validation)
+        env["VK_INSTANCE_LAYERS"] = "VK_LAYER_reshade" + os.pathsep + "VK_LAYER_KHRONOS_validation"
+        env["VK_KHRONOS_VALIDATION_DEBUG_ACTION"] = "VK_DBG_LAYER_ACTION_LOG_MSG"
+        env["VK_KHRONOS_VALIDATION_REPORT_FLAGS"] = "error,warn"
+        env["VK_KHRONOS_VALIDATION_ENABLE_MESSAGE_LIMIT"] = "false"  # every message, full lists
+        env["VK_LAYER_MESSAGE_ID_FILTER"] = RESHADE_VALIDATION_ERROR
+        env["VK_KHRONOS_VALIDATION_LOG_FILENAME"] = ""
+    return env
 
 
 def run_api(args, api, work, common, results, reference_error=None):
@@ -241,8 +290,13 @@ def run_api(args, api, work, common, results, reference_error=None):
             name = name.replace("exp_", f"exp{suffix}_", 1).replace("exact_", f"exact{suffix}_", 1)
         return c(name)
 
+    validation_logs = []
+
     def host(frames, script, *host_args):
         env = dict(os.environ, RRA_TEST_SCRIPT=script, **env_extra)
+        if "VK_KHRONOS_VALIDATION_LOG_FILENAME" in env_extra:
+            validation_logs.append(w(f"validation-{len(validation_logs) + 1}.log"))
+            env["VK_KHRONOS_VALIDATION_LOG_FILENAME"] = validation_logs[-1]
         r = subprocess.run([w("test_host.exe"), "--api", api, "--frames", str(frames), *host_args],
                            env=env, cwd=work, capture_output=True, text=True)
         return r.returncode, r.stderr.strip()
@@ -374,6 +428,19 @@ def run_api(args, api, work, common, results, reference_error=None):
         check("9 librashader.dll missing     ", w("shots", "9.png"), c("full4k.png"), c("full4k.png"), exact=True)
         add(log_has("librashader.dll not found"), "9 reason in ReShade.log       ", "librashader.dll not found")
 
+    if validation_logs:
+        # Every message of the validation layer, from all runs of the host.
+        text = ""
+        for path in validation_logs:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8", errors="ignore") as f:
+                    text += f.read()
+        errors = validation_errors(text)
+        warnings = text.count("Validation Warning")
+        add(not errors, "Vulkan validation layer       ",
+            f"{len(errors)} errors, {warnings} warnings (validation-*.log)" +
+            (f"; first: {errors[0][:200]}" if errors else ""))
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -385,6 +452,9 @@ def main():
     ap.add_argument("--apis", default=",".join(ALL_APIS))
     ap.add_argument("--dxc", default=newest_dxc(),
                     help="folder with dxcompiler.dll and dxil.dll, needed for Direct3D 12 (default: the Windows SDK)")
+    ap.add_argument("--vulkan-validation",
+                    help="folder with VkLayer_khronos_validation.json (the Vulkan SDK's Bin folder); "
+                         "the Vulkan run then also checks every Vulkan call with it")
     ap.add_argument("--build", default=os.path.join(REPO, "out", "build"))
     ap.add_argument("--work", default=os.path.join(REPO, "out", "e2e"))
     args = ap.parse_args()
