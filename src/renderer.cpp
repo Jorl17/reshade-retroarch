@@ -1,10 +1,19 @@
+// Implementation of renderer.h: copies the game's frame, rebuilds the native
+// (original, low-resolution) picture from it with the capture shader, runs the
+// RetroArch preset on that picture and copies the result back into the frame.
+// Everything here is Direct3D 11.
+
 #include "renderer.h"
 
+// The capture shader (capture.hlsl), compiled at build time into byte arrays
+// g_capture_ps and g_capture_vs (see CMakeLists.txt).
 #include "capture_ps.h"
 #include "capture_vs.h"
 
 namespace
 {
+// Calls Release() on the COM object `p` points to (dropping this code's reference to
+// it) and sets `p` to null. Does nothing if `p` is already null.
 template <typename T>
 void release(T *&p)
 {
@@ -15,8 +24,18 @@ void release(T *&p)
     }
 }
 
-// Concrete, non-sRGB format to view a resource with. Shaders must see the encoded
-// values the game wrote, exactly as RetroArch hands a core's output to a preset.
+// Background for the two functions below. A Direct3D format fixes how many bits each
+// channel of a pixel has and how shaders interpret them. "UNORM" formats hand the
+// stored integers to shaders as 0..1 with no conversion; "UNORM_SRGB" formats decode
+// them from sRGB to linear light first. Formats with the same bit layout form a family
+// (R8G8B8A8_UNORM, R8G8B8A8_UNORM_SRGB, ...), and its "TYPELESS" member fixes only the
+// layout: each view of such a texture chooses the interpretation.
+
+// Returns the plain UNORM format to read or draw a texture of format `f` with: the sRGB
+// and typeless members of the supported 8-bit and 10-bit families map to their UNORM
+// member, and every other format is returned unchanged. Shaders must see the values the
+// game stored, not sRGB-decoded ones, exactly as RetroArch hands a core's output (a
+// core is RetroArch's name for an emulator) to a preset.
 DXGI_FORMAT unorm_view(DXGI_FORMAT f)
 {
     switch (f)
@@ -37,9 +56,12 @@ DXGI_FORMAT unorm_view(DXGI_FORMAT f)
     }
 }
 
-// Typeless member of the format's family. Textures that are viewed with a format
-// other than their own (an sRGB frame viewed as UNORM) must be created typeless;
-// copies between a typed and a typeless texture of the same family are allowed.
+// Returns the TYPELESS member of the family `f` belongs to (for example
+// R8G8B8A8_TYPELESS for R8G8B8A8_UNORM_SRGB), or `f` unchanged for formats not handled
+// here. A texture must be created typeless to be viewed with a format other than its
+// own (the copy of an sRGB frame is read as UNORM). Copies between a typed and a
+// typeless texture of the same family are allowed, so such a texture can still be
+// filled from, or copied into, the game's frame.
 DXGI_FORMAT typeless(DXGI_FORMAT f)
 {
     switch (unorm_view(f))
@@ -57,6 +79,11 @@ DXGI_FORMAT typeless(DXGI_FORMAT f)
     }
 }
 
+// The values the capture pixel shader reads, laid out exactly like the `CaptureParams`
+// constant buffer in capture.hlsl: the rectangle of the frame the game's stretched
+// picture covers (x, y, width, height, in frame pixels) and the picture's native
+// resolution (width, height). `padding` rounds the size up to 32 bytes, because
+// Direct3D 11 constant buffers must be a multiple of 16 bytes long.
 struct CaptureParams
 {
     uint32_t rect[4];
@@ -65,6 +92,7 @@ struct CaptureParams
 };
 }
 
+// Returns true for the frame formats the capture can read (see renderer.h).
 bool Renderer::supported_format(DXGI_FORMAT f)
 {
     switch (unorm_view(f))
@@ -79,6 +107,8 @@ bool Renderer::supported_format(DXGI_FORMAT f)
     }
 }
 
+// Creates the capture shaders and their constant buffer on `device`. Returns false and
+// sets `error` if any of them cannot be created, leaving the renderer empty.
 bool Renderer::init(ID3D11Device *device, std::string &error)
 {
     shutdown();
@@ -98,6 +128,7 @@ bool Renderer::init(ID3D11Device *device, std::string &error)
     return true;
 }
 
+// Releases every GPU object and forgets the device and all sizes and formats.
 void Renderer::shutdown()
 {
     release(out_rtv_);
@@ -118,6 +149,8 @@ void Renderer::shutdown()
     device_ = nullptr;
 }
 
+// Copies `frame` into snap_tex_ and returns snap_tex_, or returns nullptr and sets
+// `error` if the frame's format is not supported or the copy cannot be created.
 ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *frame, std::string &error)
 {
     D3D11_TEXTURE2D_DESC fd;
@@ -128,6 +161,9 @@ ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *f
         return nullptr;
     }
 
+    // (Re)create the copy when there is none yet or the frame's size or format changed
+    // (window resize, resolution change). It is single-sample, typeless in the frame's
+    // family, and read by shaders as plain UNORM.
     if (snap_tex_ == nullptr || fd.Width != snap_desc_.Width || fd.Height != snap_desc_.Height ||
         fd.Format != snap_format_)
     {
@@ -158,7 +194,11 @@ ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *f
         snap_format_ = fd.Format;
     }
 
-    // A typed source must be resolved with its own format; a typeless one with the view format.
+    // Copy the frame. A multisampled frame (MSAA: several colour samples per pixel, to
+    // smooth edges) cannot be copied into a single-sample texture, so its samples are
+    // averaged into one per pixel with ResolveSubresource instead. That call needs a
+    // concrete format: a frame created with one is resolved in its own format; a
+    // typeless frame is resolved as plain UNORM.
     if (fd.SampleDesc.Count > 1)
         ctx->ResolveSubresource(snap_tex_, 0, frame, 0, typeless(fd.Format) == fd.Format ? unorm_view(fd.Format) : fd.Format);
     else
@@ -166,6 +206,9 @@ ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *f
     return snap_tex_;
 }
 
+// Makes sure native_tex_ is `w` x `h`: keeps it if it already is, otherwise creates a
+// new RGBA 8-bit texture with a render target view (for the capture shader to draw
+// into) and a shader resource view (for the shader chain to read).
 bool Renderer::ensure_native(int w, int h, std::string &error)
 {
     if (native_tex_ != nullptr && w == native_w_ && h == native_h_)
@@ -199,6 +242,9 @@ bool Renderer::ensure_native(int w, int h, std::string &error)
     return true;
 }
 
+// Makes sure out_tex_ is `w` x `h` and was made for frame format `format`: keeps it if
+// so, otherwise creates a new one with a render target view for librashader to draw
+// into.
 bool Renderer::ensure_output(int w, int h, DXGI_FORMAT format, std::string &error)
 {
     if (out_tex_ != nullptr && UINT(w) == out_desc_.Width && UINT(h) == out_desc_.Height && format == out_format_)
@@ -207,7 +253,8 @@ bool Renderer::ensure_output(int w, int h, DXGI_FORMAT format, std::string &erro
     release(out_tex_);
     out_desc_ = {};
 
-    // Same format family as the frame, so it can be copied into it.
+    // Typeless in the frame's format family, so it can be copied into the frame, and
+    // drawn into as plain UNORM, so shaders write the values that end up in the frame.
     D3D11_TEXTURE2D_DESC d = {};
     d.Width = UINT(w);
     d.Height = UINT(h);
@@ -233,9 +280,14 @@ bool Renderer::ensure_output(int w, int h, DXGI_FORMAT format, std::string &erro
     return true;
 }
 
+// Rebuilds the native image from the last snapshot, runs `chain` on it and copies the
+// result into `dst` over grid's rectangle (see renderer.h). Returns false and sets
+// `error` on failure; `dst` is then unchanged.
 bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderChain &chain, ID3D11Texture2D *dst,
                       uint64_t frame_count, std::string &error)
 {
+    // Refuse to run without a snapshot or a valid grid, or with a grid whose rectangle
+    // reaches outside the snapshot.
     if (snap_tex_ == nullptr || !grid.valid)
     {
         error = "nothing to render";
@@ -250,12 +302,23 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
     if (!ensure_native(grid.native_w, grid.native_h, error))
         return false;
 
+    // Step 1: rebuild the native image. Pass the grid to the capture shader, then draw
+    // one triangle covering the whole native_w x native_h target; the pixel shader runs
+    // once per native pixel and copies the frame pixel at the centre of that pixel's
+    // block (capture.hlsl).
     const CaptureParams params = {
         {uint32_t(grid.rect_x), uint32_t(grid.rect_y), uint32_t(grid.rect_w), uint32_t(grid.rect_h)},
         {uint32_t(grid.native_w), uint32_t(grid.native_h)},
         {0, 0}};
     ctx->UpdateSubresource(cb_, 0, nullptr, &params, 0, 0);
 
+    // Clear pixel shader input slot 0 first, so a view of native_tex_ left there (for
+    // example by the previous frame's shader chain) is not bound as an input while
+    // native_tex_ becomes the render target; Direct3D 11 does not allow a texture to be
+    // both at once. Then set up the pipeline from scratch: default rasterizer, blend and
+    // depth-stencil states (no blending; no depth buffer is bound, so no depth test), no
+    // vertex buffer (the vertex shader makes the triangle from the vertex numbers alone),
+    // and only the capture shaders.
     ID3D11ShaderResourceView *null_srv = nullptr;
     ID3D11RenderTargetView *null_rtv = nullptr;
     ctx->PSSetShaderResources(0, 1, &null_srv);
@@ -275,9 +338,11 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
     ctx->PSSetConstantBuffers(0, 1, &cb_);
     ctx->PSSetShaderResources(0, 1, &snap_srv_);
     ctx->Draw(3, 0);
+    // Unbind the snapshot and native_tex_ so the shader chain can read native_tex_.
     ctx->PSSetShaderResources(0, 1, &null_srv);
     ctx->OMSetRenderTargets(1, &null_rtv, nullptr);
 
+    // The final copy needs `dst` to have one sample per pixel, like out_tex_.
     D3D11_TEXTURE2D_DESC dd;
     dst->GetDesc(&dd);
     if (dd.SampleDesc.Count != 1)
@@ -285,6 +350,9 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
         error = "multisampled output is not supported";
         return false;
     }
+    // Step 2: run the preset on the native image, into out_tex_, which is exactly the
+    // size of the rectangle. Step 3: copy out_tex_ into `dst` at the rectangle's
+    // position, leaving the rest of `dst` as it was.
     if (!ensure_output(grid.rect_w, grid.rect_h, dd.Format, error) ||
         !chain.frame(ctx, native_srv_, out_rtv_, 0, 0, grid.rect_w, grid.rect_h, frame_count, error))
         return false;

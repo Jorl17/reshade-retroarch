@@ -1,12 +1,25 @@
-// Runs a RetroArch preset on a screenshot, through the same code the add-on uses
-// (grid detection, capture, librashader). No game, no ReShade.
+// Command-line tool: applies a RetroArch shader preset (.slangp file) to a screenshot
+// and saves the result as a PNG, using the same code the ReShade add-on uses (grid
+// detection, capture of the native image, librashader), but with no game and no ReShade.
+// The end-to-end test (tests/e2e.py) uses its output as the expected result, and
+// tests/compat_sweep.py uses it to try every preset in a shader folder.
+//
+// Words used below:
+//   native image   the game's own low-resolution picture (e.g. 424x240), before the game
+//                  stretched it to fill the screen.
+//   pixel grid     where that picture sits in the frame and at what resolution.
+//   back buffer    the texture a game draws its frame into before it is shown.
 //
 //   render_png <preset.slangp> <input.png> <output.png> [options]
-//     --frames N          frames to render before saving (default 3)
+//     --frames N          number of frames to render before saving (default 3); presets
+//                         that use earlier frames need a few to settle
 //     --native out.png    also save the recovered native image
-//     --grid auto|frame|WxH   how to find the native image (default auto)
-//     --set name=value    override a preset parameter (repeatable)
+//     --grid auto|frame|WxH   how to find the native image: auto detects it (default),
+//                         frame uses the whole frame as it is, WxH treats the whole frame
+//                         as a W x H picture stretched to fill it
+//     --set name=value    change a preset parameter before rendering (repeatable)
 //
+// Exit code: 0 success, 1 failure (message on stderr), 2 bad command line.
 // librashader.dll must be next to the executable.
 
 #include "chain.h"
@@ -20,6 +33,8 @@
 #include <string>
 #include <vector>
 
+// Converts a UTF-16 string (a Windows command-line argument) to UTF-8, the encoding
+// the add-on's code and librashader take paths and names in.
 static std::string narrow(const wchar_t *s)
 {
     std::string out(size_t(WideCharToMultiByte(CP_UTF8, 0, s, -1, nullptr, 0, nullptr, nullptr)), '\0');
@@ -28,6 +43,10 @@ static std::string narrow(const wchar_t *s)
     return out;
 }
 
+// Saves the GPU texture `tex` as the PNG file `path`. The texture must hold 8-bit RGBA
+// pixels. Returns false on failure.
+// The GPU texture cannot be read by the CPU directly, so it is first copied into a
+// "staging" texture: a CPU-readable copy with the same size and format.
 static bool read_back(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11Texture2D *tex, const wchar_t *path)
 {
     D3D11_TEXTURE2D_DESC d;
@@ -51,6 +70,10 @@ static bool read_back(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11Texture
     return ok;
 }
 
+// Entry point (wide-character arguments, so paths with any characters work). See the top
+// of the file for the arguments. Loads the input picture into a stand-in back buffer,
+// finds the pixel grid, loads the preset, renders `--frames` frames the way the add-on
+// does each frame, and saves the back buffer (and optionally the native image).
 int wmain(int argc, wchar_t **argv)
 {
     if (argc < 4)
@@ -59,6 +82,8 @@ int wmain(int argc, wchar_t **argv)
                          L"[--grid auto|frame|WxH] [--set name=value]...\n");
         return 2;
     }
+    // Options after the three fixed arguments, each followed by its value. Unknown
+    // options are ignored; an option with no value ends the list.
     int frames = 3;
     const wchar_t *native_out = nullptr;
     std::wstring grid_mode = L"auto";
@@ -83,6 +108,7 @@ int wmain(int argc, wchar_t **argv)
         }
     }
 
+    // COM must be initialised before png_io.h can load or save images.
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     std::vector<uint8_t> rgba;
     UINT w = 0, h = 0;
@@ -92,6 +118,7 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
 
+    // Load librashader.dll from this executable's folder.
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     std::wstring dll = exe;
@@ -103,6 +130,7 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
 
+    // A Direct3D 11 device on the default GPU, like the one a D3D11 game creates.
     ID3D11Device *dev = nullptr;
     ID3D11DeviceContext *ctx = nullptr;
     const D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
@@ -113,7 +141,9 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
 
-    // Stand-in for the game's back buffer (same format as most games use).
+    // Stand-in for the game's back buffer: a texture of the input's size, filled with the
+    // input picture, in the format most games use (8-bit RGBA). The renderer reads the
+    // frame from it and writes its result into it, as the add-on does with a real one.
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = w;
     td.Height = h;
@@ -133,6 +163,8 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
 
+    // Decide where the native image is. "auto" runs the add-on's grid detector on the
+    // input and fails (exit 1) if it finds none; "frame" and "WxH" cover the whole frame.
     PixelGrid grid;
     if (grid_mode == L"auto")
     {
@@ -162,6 +194,8 @@ int wmain(int argc, wchar_t **argv)
         printf("grid: %s\n", grid.describe().c_str());
     }
 
+    // Set up the renderer (the add-on's capture and compositing code) and compile the
+    // preset with librashader, then apply the --set parameter changes.
     Renderer renderer;
     ShaderChain chain;
     const auto t0 = std::chrono::steady_clock::now();
@@ -183,6 +217,9 @@ int wmain(int argc, wchar_t **argv)
         printf("set %s = %g\n", name.c_str(), value);
     }
 
+    // Each frame: put the input picture back into the back buffer (as the game would
+    // draw it), copy it (snapshot), then recover the native image, run the preset on it
+    // and write the result into the back buffer's grid rectangle.
     for (int i = 0; i < frames; ++i)
     {
         ctx->UpdateSubresource(backbuffer, 0, nullptr, rgba.data(), w * 4, 0); // the game draws a frame
@@ -197,6 +234,7 @@ int wmain(int argc, wchar_t **argv)
     printf("%d frames in %.1f ms\n", frames,
            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
 
+    // Save the last frame, and the native image it was made from if --native was given.
     if (!read_back(dev, ctx, backbuffer, argv[3]) ||
         (native_out != nullptr && !read_back(dev, ctx, renderer.native_texture(), native_out)))
     {

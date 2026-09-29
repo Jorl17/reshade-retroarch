@@ -1,0 +1,8 @@
+# One-pass preset around capture.slang (see there): turns the game's frame into its
+# native-resolution picture. The add-on renders it into a texture of the native size,
+# so the pass's output is exactly one pixel per native pixel.
+shaders = 1
+shader0 = "capture.slang"
+filter_linear0 = false
+scale_type0 = viewport
+scale0 = 1.0
