@@ -5,6 +5,7 @@
 
 #include <GL/gl.h>
 
+#include <cstdio>
 #include <map>
 
 namespace
@@ -115,13 +116,27 @@ public:
             error = "could not create the picture texture";
             return false;
         }
+        // Errors recorded before this point are not this draw's (ReShade makes OpenGL calls
+        // of its own when a frame is presented): clear them, so the check below is about
+        // the blit only. (At most a few: OpenGL keeps one per error kind.)
+        for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i)
+        {
+        }
         // Texture row 0 is the picture's top row; window row 0 is the bottom. Flip, so
         // the window shows the picture the right way up, as the Direct3D hosts do.
         BindFramebuffer(kReadFramebuffer, p->fbo);
         BlitFramebuffer(0, 0, GLint(img->w), GLint(img->h), 0, GLint(img->h), GLint(img->w), 0, GL_COLOR_BUFFER_BIT,
                         GL_NEAREST);
         BindFramebuffer(kReadFramebuffer, 0);
-        return glGetError() == GL_NO_ERROR || (error = "glBlitFramebuffer failed", false);
+        const GLenum blit_error = glGetError();
+        if (blit_error != GL_NO_ERROR)
+        {
+            char code[16];
+            snprintf(code, sizeof(code), "0x%04X", unsigned(blit_error));
+            error = std::string("glBlitFramebuffer failed (OpenGL error ") + code + ")";
+            return false;
+        }
+        return true;
     }
 
     bool read_back(Image &out, std::string &error) override

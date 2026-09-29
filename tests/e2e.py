@@ -300,7 +300,9 @@ def run_api(args, api, work, common, results, reference_error=None):
             env["VK_KHRONOS_VALIDATION_LOG_FILENAME"] = validation_logs[-1]
         r = subprocess.run([w("test_host.exe"), "--api", api, "--frames", str(frames), *host_args],
                            env=env, cwd=work, capture_output=True, text=True)
-        return r.returncode, r.stderr.strip()
+        # The end of the host's error output: its own message comes last, after any
+        # messages from the graphics API's loader.
+        return r.returncode, r.stderr.strip()[-600:]
 
     def add(ok, label, detail):
         results.append(("PASS" if ok else "FAIL", f"{api:6} {label}", detail))
@@ -341,7 +343,7 @@ def run_api(args, api, work, common, results, reference_error=None):
     code, err = host(1550, script, "--image", "0:" + c("full4k.png"), "--image", "750:" + c("pillar4k.png"),
                      "--resize", "1120:1920x1080", "--image", "1120:" + c("full1080.png"))
     if code != 0:
-        add(False, "main scenario", f"test host exit {code}: {err[:200]}")
+        add(False, "main scenario", f"test host exit {code}: {err}")
         return
     shutil.copy(w("ReShade.log"), w("ReShade-run1.log"))
     check("1 companion present, 4K       ", w("shots", "1.png"), expected("exp_full4k.png"), c("full4k.png"))
@@ -416,7 +418,7 @@ def run_api(args, api, work, common, results, reference_error=None):
         code, err = host(1050, exact_script, "--image", "0:" + c("full4k.png"), "--image", "250:" + c("pillar4k.png"),
                          "--resize", "650:1920x1080", "--image", "650:" + c("full1080.png"))
         if code != 0:
-            add(False, "E exact runs                  ", f"test host exit {code}: {err[:200]}")
+            add(False, "E exact runs                  ", f"test host exit {code}: {err}")
         else:
             check("E1 exact: 4K                   ", w("shots", "E1.png"), expected("exact_full4k.png"), None, exact=True)
             check("E2 exact: pillarbox, side art  ", w("shots", "E2.png"), expected("exact_pillar4k.png"), None,

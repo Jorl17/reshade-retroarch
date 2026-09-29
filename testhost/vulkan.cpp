@@ -237,9 +237,13 @@ private:
         ci.pApplicationInfo = &app;
         ci.enabledExtensionCount = o_.hdr10 ? 3 : 2; // the colour space extension only for HDR10
         ci.ppEnabledExtensionNames = extensions;
-        if (vk_.vkCreateInstance == nullptr || vk_.vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS)
+        const VkResult created = vk_.vkCreateInstance != nullptr ? vk_.vkCreateInstance(&ci, nullptr, &instance_)
+                                                                  : VK_ERROR_INITIALIZATION_FAILED;
+        if (created != VK_SUCCESS)
         {
-            error = o_.hdr10 ? "vkCreateInstance failed (no HDR colour space support?)" : "vkCreateInstance failed";
+            // The VkResult tells e.g. a missing layer (-6) from a missing extension (-7).
+            error = "vkCreateInstance failed (VkResult " + std::to_string(int(created)) + ")" +
+                    (o_.hdr10 ? " (no HDR colour space support?)" : "");
             unsupported = o_.hdr10;
             return false;
         }

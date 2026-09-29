@@ -98,6 +98,7 @@ jobs:
           export PATH="$PWD/out/ci-deps/vulkan-runtime:$PATH"
           export VK_DRIVER_FILES="$(cygpath -w "$PWD/out/ci-deps/mesa/x64/lvp_icd.x86_64.json")"
           export GALLIUM_DRIVER=llvmpipe
+          export VK_LOADER_DEBUG=error,warn
           python tests/e2e.py --apis vulkan,opengl --reshade out/ci-deps/ReShade64.dll \
             --librashader out/ci-deps/librashader.dll --shaders out/ci-deps/slang-shaders \
             --preset crt/zfast-crt.slangp --native out/synthetic/native.png \
