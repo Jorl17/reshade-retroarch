@@ -170,7 +170,17 @@ void FrameRenderer::destroy(resource &res, resource_view &view1, resource_view &
 ChainImage FrameRenderer::chain_image(resource res, resource_view view, format fmt, uint32_t width,
                                       uint32_t height) const
 {
-    // Direct3D 11 takes views; the other APIs are added with their support.
+    if (chain_device_.api == GraphicsApi::opengl)
+    {
+        // ReShade's OpenGL handles hold the object's name in their low 32 bits. The view is
+        // used: it is the texture seen with the right format (a texture view when ReShade
+        // had to make one). librashader wants the sized internal format.
+        uint32_t gl_format = 0x8058; // GL_RGBA8
+        if (format_to_default_typed(fmt, 0) == format::r10g10b10a2_unorm)
+            gl_format = 0x8059; // GL_RGB10_A2
+        return ChainImage{view.handle & 0xFFFFFFFF, view.handle, gl_format, width, height};
+    }
+    // Direct3D 11 takes views; Direct3D 12 the resource, a descriptor and the format.
     return ChainImage{res.handle, view.handle, uint32_t(fmt), width, height};
 }
 

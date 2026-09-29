@@ -1,7 +1,7 @@
 # RetroArch Shaders for ReShade
 
 A ReShade add-on that runs **unmodified RetroArch shader presets** (`.slangp`) on
-Direct3D 11 and Direct3D 12 games, through
+Direct3D 11, Direct3D 12 and OpenGL games, through
 [librashader](https://github.com/SnowflakePowered/librashader).
 
 Re-releases of old games usually scale a low-resolution picture up to your screen. A CRT
@@ -125,8 +125,8 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 
 ## Limitations
 
-- Direct3D 11 and 12. OpenGL, Vulkan and Direct3D 9 are not supported yet; Direct3D 10
-  cannot be (librashader has no Direct3D 10 support).
+- Direct3D 11, Direct3D 12 and OpenGL. Vulkan and Direct3D 9 are not supported yet;
+  Direct3D 10 cannot be (librashader has no Direct3D 10 support).
 - Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
 - No HDR content (see FAQ).
 - Automatic detection needs sharp pixels. For smoothly upscaled games, use **Fixed**.

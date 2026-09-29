@@ -89,7 +89,29 @@ std::vector<std::pair<std::string, float>> param_overrides(const std::vector<Sha
 
 bool ShaderChain::supports(GraphicsApi api)
 {
-    return api == GraphicsApi::d3d11 || api == GraphicsApi::d3d12;
+    return api == GraphicsApi::d3d11 || api == GraphicsApi::d3d12 || api == GraphicsApi::opengl;
+}
+
+// Finds an OpenGL function for librashader: wglGetProcAddress knows the functions added
+// after OpenGL 1.1, GetProcAddress on opengl32.dll the 1.1 ones (wglGetProcAddress
+// returns small non-null values for some failures, which count as "not found").
+// opengl32.dll is the one the game has loaded; it is looked up at run time so the add-on
+// does not load OpenGL into games that use Direct3D.
+static const void *gl_function(const char *name)
+{
+    const HMODULE gl = GetModuleHandleW(L"opengl32.dll");
+    if (gl == nullptr)
+        return nullptr;
+    using GetProc = PROC(WINAPI *)(LPCSTR);
+    const auto wgl_get_proc = reinterpret_cast<GetProc>(reinterpret_cast<void *>(GetProcAddress(gl, "wglGetProcAddress")));
+    if (wgl_get_proc != nullptr)
+    {
+        const PROC p = wgl_get_proc(name);
+        const auto v = reinterpret_cast<intptr_t>(p);
+        if (v != 0 && v != 1 && v != 2 && v != 3 && v != -1)
+            return reinterpret_cast<const void *>(p);
+    }
+    return reinterpret_cast<const void *>(GetProcAddress(gl, name));
 }
 
 // Fills the per-frame values librashader passes to the shaders, the same for every API:
@@ -185,6 +207,16 @@ bool ShaderChain::create(const ChainDevice &device, const std::string &preset_pa
         chain = c;
         break;
     }
+    case GraphicsApi::opengl:
+    {
+        // Needs the OpenGL context to be current on this thread.
+        filter_chain_gl_opt_t opt = {};
+        opt.version = LIBRASHADER_CURRENT_VERSION;
+        libra_gl_filter_chain_t c = nullptr;
+        err = api.gl_filter_chain_create(&preset, gl_function, &opt, &c);
+        chain = c;
+        break;
+    }
     default:
         break;
     }
@@ -219,6 +251,12 @@ void ShaderChain::destroy()
         {
             libra_d3d12_filter_chain_t chain = static_cast<libra_d3d12_filter_chain_t>(chain_);
             libra::api().d3d12_filter_chain_free(&chain);
+            break;
+        }
+        case GraphicsApi::opengl:
+        {
+            libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(chain_);
+            libra::api().gl_filter_chain_free(&chain);
             break;
         }
         default:
@@ -276,6 +314,15 @@ bool ShaderChain::frame(uint64_t commands, const ChainImage &input, const ChainI
                                                     size_t(frame_count), in, out, &viewport, nullptr, &opt);
         break;
     }
+    case GraphicsApi::opengl:
+    {
+        const frame_gl_opt_t opt = frame_options<frame_gl_opt_t>();
+        const libra_image_gl_t in = {uint32_t(input.resource), input.format, input.width, input.height};
+        const libra_image_gl_t out = {uint32_t(output.resource), output.format, output.width, output.height};
+        libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(chain_);
+        err = libra::api().gl_filter_chain_frame(&chain, size_t(frame_count), in, out, &viewport, nullptr, &opt);
+        break;
+    }
     default:
         error = std::string(api_name(api_)) + " is not supported yet";
         return false;
@@ -308,6 +355,12 @@ bool ShaderChain::set_param(const std::string &name, float value, std::string &e
     {
         libra_d3d12_filter_chain_t chain = static_cast<libra_d3d12_filter_chain_t>(chain_);
         err = libra::api().d3d12_filter_chain_set_param(&chain, name.c_str(), value);
+        break;
+    }
+    case GraphicsApi::opengl:
+    {
+        libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(chain_);
+        err = libra::api().gl_filter_chain_set_param(&chain, name.c_str(), value);
         break;
     }
     default:

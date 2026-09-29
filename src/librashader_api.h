@@ -7,6 +7,7 @@
 // The librashader runtimes (one per graphics API) whose functions this project calls.
 #define LIBRA_RUNTIME_D3D11
 #define LIBRA_RUNTIME_D3D12
+#define LIBRA_RUNTIME_OPENGL
 #include "librashader_ld.h"
 
 // librashader, loaded at runtime from a known location (next to the add-on), so a
