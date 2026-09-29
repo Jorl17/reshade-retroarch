@@ -1,0 +1,67 @@
+#include "librashader_api.h"
+
+#include <mutex>
+
+namespace
+{
+std::mutex g_mutex;
+libra_instance_t g_api = {};
+bool g_loaded = false;
+}
+
+bool libra::load(const std::wstring &dll_path, std::string &error)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_loaded)
+        return true;
+
+    // librashader_load_instance() calls LoadLibraryW(L"librashader.dll"). Loading our
+    // copy by full path first makes that call return this module rather than
+    // whatever the DLL search order would find.
+    if (LoadLibraryExW(dll_path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) == nullptr)
+    {
+        error = "librashader.dll not found next to the add-on (error " + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    g_api = librashader_load_instance();
+    if (!g_api.instance_loaded)
+    {
+        error = "librashader.dll could not be loaded (ABI " + std::to_string(g_api.instance_abi_version()) +
+                ", expected " + std::to_string(LIBRASHADER_CURRENT_ABI) + ")";
+        return false;
+    }
+    if (g_api.instance_api_version() < LIBRASHADER_CURRENT_VERSION)
+    {
+        error = "librashader.dll is too old (API " + std::to_string(g_api.instance_api_version()) + ", need " +
+                std::to_string(LIBRASHADER_CURRENT_VERSION) + ")";
+        return false;
+    }
+    g_loaded = true;
+    return true;
+}
+
+bool libra::loaded()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_loaded;
+}
+
+const libra_instance_t &libra::api()
+{
+    return g_api;
+}
+
+std::string libra::take_error(libra_error_t err)
+{
+    if (err == nullptr)
+        return {};
+    char *msg = nullptr;
+    std::string text = "librashader error";
+    if (g_api.error_write(err, &msg) == 0 && msg != nullptr)
+    {
+        text = msg;
+        g_api.error_free_string(&msg);
+    }
+    g_api.error_free(&err);
+    return text;
+}
