@@ -135,21 +135,14 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 
 ## Limitations
 
-- Direct3D 11, Direct3D 12, OpenGL and Vulkan. Direct3D 10 cannot be supported
-  (librashader has no Direct3D 10 support).
-- Vulkan relies on a workaround: ReShade does not give add-ons the game's Vulkan instance
-  and GPU object, which librashader needs, so the add-on makes its own and matches the
-  GPU. If it cannot match the GPU or the game's queue, it leaves the game untouched and
-  says why. Games that draw their final picture on a different GPU queue from the one
-  they show it with (a few recent games do) may not work correctly.
-- Direct3D 9 is experimental: librashader supports it only for shaders that fit Direct3D
-  9's old shader model, and its Direct3D 9 runtime renders some presets quite differently
-  from the other APIs (crt-royale comes out much darker, for example).
-- Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
-- On Direct3D 12, librashader renders some presets slightly differently from the other
-  APIs, so they can look a little different there (crt-royale's glow, for example).
-- On Vulkan, each time a preset is loaded again (for example after changing it), a little
-  GPU memory is not given back until the game closes (a librashader bug).
+- No Direct3D 10 (librashader does not support it).
+- Direct3D 9 is experimental: some presets do not load, and some look different
+  (crt-royale comes out much darker, for example).
+- On Direct3D 12, some presets look slightly different (crt-royale's glow, for example).
+- On Vulkan, a few recent games may not work correctly. When the add-on cannot work with a
+  game, it leaves it untouched and says why.
+- On Vulkan, each preset reload uses a little GPU memory that is only freed when the game
+  closes.
 - No HDR content (see FAQ).
 - Automatic detection needs sharp pixels. For smoothly upscaled games, use **Fixed**.
 - Bezel shaders only cover the game area.
@@ -178,21 +171,14 @@ fetches the pinned `librashader.dll`.
 
 ### What CI runs
 
-CI (GitHub Actions) runs everything above, but the end-to-end test only on OpenGL, with
-Mesa's software OpenGL driver. CI machines have no GPU, and:
-
-- ReShade does not run on Windows' software Direct3D.
-- ReShade 6.8.0 crashes on start-up on Mesa's software Vulkan driver (lavapipe), even
-  with no add-ons.
-
-So run the Direct3D and Vulkan end-to-end tests on a PC with a GPU before a release:
+CI runs all of the above, but the end-to-end test only on OpenGL: CI machines have no
+GPU, and ReShade does not run on the software Direct3D and Vulkan drivers there. Before a
+release, run the end-to-end test on a PC with a GPU, from a normal prompt (the Vulkan part
+does not work as administrator):
 
 ```
 python tests/e2e.py --reshade <ReShade64.dll> --librashader <librashader.dll> --shaders <slang-shaders> --preset <preset> --native <native.png>
 ```
-
-Run it from a normal prompt, not an administrator one: with administrator rights, the
-Vulkan loader ignores the variables the test uses to load ReShade (`VK_ADD_LAYER_PATH`).
 
 `tests/ci_deps.py <folder>` downloads what CI uses (pinned versions).
 
