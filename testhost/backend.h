@@ -10,7 +10,7 @@
 //    (no scaling, no filtering, no shaders),
 //  - show it (present),
 //  - on request, read the back buffer back to the CPU.
-// Because nothing is transformed, the frame ReShade sees is byte-identical on every
+// Because nothing is transformed, the frame ReShade gets is byte-identical on every
 // API, so results from different APIs can be compared directly.
 
 #include <windows.h>

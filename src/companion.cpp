@@ -1,5 +1,9 @@
+// Implementation of companion.h: reading and writing the companion .slangp files.
+
 #include "companion.h"
 #include "utf8.h"
+
+#include <windows.h>
 
 #include <cstdio>
 #include <fstream>
@@ -56,7 +60,7 @@ bool read_reference(const fs::path &companion, fs::path &target)
         std::error_code ec;
         if (target.is_relative())
         {
-            // librashader resolves against the canonical folder (junctions resolved).
+            // librashader takes it from the folder's real path (junctions replaced).
             fs::path dir = fs::canonical(companion.parent_path(), ec);
             if (ec)
                 dir = companion.parent_path();
@@ -77,7 +81,7 @@ bool write_companion(const fs::path &companion, const fs::path &target, bool rel
     fs::path ref = target;
     if (relative)
     {
-        // Relative to the canonical folder, which is what librashader resolves against.
+        // Relative to the folder's real path, which librashader starts from.
         fs::path dir = fs::canonical(companion.parent_path(), ec);
         if (ec)
             dir = companion.parent_path();
@@ -86,6 +90,8 @@ bool write_companion(const fs::path &companion, const fs::path &target, bool rel
             ref = rel;
     }
 
+    // The file: the #reference line, a blank line, then one `name = "value"` line per
+    // parameter, as RetroArch writes them.
     std::ostringstream text;
     text << "#reference \"" << utf8_from_path(ref, true) << "\"\n";
     if (!params.empty())
@@ -122,6 +128,7 @@ bool write_companion(const fs::path &companion, const fs::path &target, bool rel
 
 bool set_aside(const fs::path &file, std::string &error)
 {
+    // Try "<file>.removed", then "<file>.removed.2" and so on, up to 100 names.
     for (int i = 1; i <= 100; ++i)
     {
         const std::wstring name = file.wstring() + L".removed" + (i == 1 ? std::wstring() : L"." + std::to_wstring(i));

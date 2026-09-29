@@ -1,3 +1,5 @@
+// Implementation of discovery.h: the folders searched for presets, and the search.
+
 #include "discovery.h"
 #include "utf8.h"
 
@@ -13,12 +15,15 @@ namespace fs = std::filesystem;
 
 namespace
 {
+// True if `p` is an existing folder (false on any error, e.g. no access).
 bool is_dir(const fs::path &p)
 {
     std::error_code ec;
     return fs::is_directory(p, ec);
 }
 
+// Returns the text value `value` of registry key `key` under `root`, or an empty string
+// if it does not exist.
 std::wstring reg_string(HKEY root, const wchar_t *key, const wchar_t *value)
 {
     wchar_t buf[MAX_PATH * 2] = {};
@@ -28,7 +33,9 @@ std::wstring reg_string(HKEY root, const wchar_t *key, const wchar_t *value)
     return buf;
 }
 
-// Steam library folders, from steamapps/libraryfolders.vdf.
+// Returns the folders Steam installs games into ("libraries"): Steam's own folder (from
+// the registry) and those listed in its steamapps/libraryfolders.vdf. Empty if Steam is not
+// installed.
 std::vector<fs::path> steam_libraries()
 {
     std::vector<fs::path> libs;
@@ -57,6 +64,7 @@ std::vector<ShaderRoot> find_shader_roots(const fs::path &addon_dir, const fs::p
                                           const std::vector<fs::path> &extra)
 {
     std::vector<ShaderRoot> roots;
+    // Adds `dir` under `name` if it exists and is not the same folder as one already added.
     auto add = [&](const std::string &name, const fs::path &dir) {
         if (!is_dir(dir))
             return;
@@ -71,6 +79,7 @@ std::vector<ShaderRoot> find_shader_roots(const fs::path &addon_dir, const fs::p
     add("retroarch-shaders", addon_dir / L"retroarch-shaders");
     add("retroarch-shaders", exe_dir / L"retroarch-shaders");
 
+    // RetroArch keeps its slang shaders in shaders\shaders_slang, wherever it is installed.
     const fs::path slang = fs::path(L"shaders") / L"shaders_slang";
     add("RetroArch", fs::path(L"C:\\RetroArch-Win64") / slang);
     add("RetroArch", fs::path(L"C:\\RetroArch") / slang);
@@ -91,6 +100,7 @@ std::vector<PresetEntry> scan_presets(const std::vector<ShaderRoot> &roots, cons
     std::vector<PresetEntry> out;
     std::unordered_set<std::wstring> visited; // canonical folders, so links cannot loop
     skipped = 0;
+    // True the first time a folder is seen (by its real path, ignoring case), false after.
     auto first_visit = [&](const fs::path &dir) {
         std::error_code ec;
         const fs::path canon = fs::canonical(dir, ec);
@@ -98,6 +108,8 @@ std::vector<PresetEntry> scan_presets(const std::vector<ShaderRoot> &roots, cons
         std::transform(key.begin(), key.end(), key.begin(), ::towlower);
         return visited.insert(key).second;
     };
+    // Walk each root's folder tree with a list of folders still to open (no recursion, so
+    // deep trees cannot overflow the stack).
     for (const ShaderRoot &root : roots)
     {
         std::vector<fs::path> pending;
@@ -134,7 +146,8 @@ std::vector<PresetEntry> scan_presets(const std::vector<ShaderRoot> &roots, cons
                 std::transform(e.begin(), e.end(), e.begin(), ::towlower);
                 if (e != L".slangp")
                     continue;
-                // Lexical: through a link, fs::relative would resolve it and give "../..".
+                // Lexical: through a link, fs::relative would use the link's target and
+                // give "../..".
                 const fs::path rel = path.lexically_relative(root.dir);
                 out.push_back({root.name + "/" + utf8_from_path(rel.empty() ? path.filename() : rel, true), path});
             }

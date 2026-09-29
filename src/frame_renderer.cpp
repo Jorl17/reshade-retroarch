@@ -14,10 +14,10 @@ using namespace reshade::api;
 
 // A ring of kFramesInFlight private command lists librashader records into on Direct3D 12
 // and Vulkan (see frame_renderer.h), used in turn. One is reused only once the GPU has
-// finished what was recorded into it the last time, which a fence tells (a marker the GPU
+// finished what was recorded into it the last time, checked with a fence (a marker the GPU
 // reaches after the list; ReShade's fences are not used because signalling one submits
 // ReShade's commands at that point). So when frame N is recorded, the GPU has finished
-// frame N - kFramesInFlight, as librashader needs (see kFramesInFlight in chain.h).
+// frame N - kFramesInFlight, as librashader requires (see kFramesInFlight in chain.h).
 struct FrameRenderer::PrivateCommands
 {
     // Implementations wait until the GPU has finished every list they submitted, then
@@ -35,7 +35,7 @@ struct FrameRenderer::PrivateCommands
 
 // Direct3D 12: command allocators (the memory a command list records into) used in turn
 // with one command list, and a fence (a counter the GPU sets when it reaches a point in the
-// queue) that tells when the GPU has finished each allocator's list.
+// queue) that shows when the GPU has finished each allocator's list.
 struct FrameRenderer::D3D12Commands final : FrameRenderer::PrivateCommands
 {
     ID3D12CommandQueue *queue = nullptr; // not owned
@@ -404,7 +404,7 @@ ChainImage FrameRenderer::chain_image(resource res, resource_view view, format f
     {
         // ReShade's OpenGL handles hold the object's name in their low 32 bits. The view is
         // used: it is the texture seen with the right format (a texture view when ReShade
-        // had to make one). librashader wants the sized internal format.
+        // had to make one). librashader takes the sized internal format.
         uint32_t gl_format = 0x8058; // GL_RGBA8
         if (format_to_default_typed(fmt, 0) == format::r10g10b10a2_unorm)
             gl_format = 0x8059; // GL_RGB10_A2
@@ -412,7 +412,7 @@ ChainImage FrameRenderer::chain_image(resource res, resource_view view, format f
     }
     if (chain_device_.api == GraphicsApi::vulkan)
     {
-        // ReShade's Vulkan handles are the VkImage itself. librashader wants the VkFormat,
+        // ReShade's Vulkan handles are the VkImage itself. librashader takes the VkFormat,
         // as ReShade 6.8 maps these formats (convert_format).
         VkFormat vk_format = VK_FORMAT_R8G8B8A8_UNORM;
         switch (format_to_default_typed(fmt, 0))

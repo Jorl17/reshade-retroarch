@@ -25,6 +25,9 @@ def game_running(names):
 
 
 def run_one(render_png, preset, image, scratch, pause_for):
+    """Renders `image` with `preset` through render_png (2 frames, low priority, at most
+    180 s) and returns {"preset", "ok", "seconds", "error"}; the rendered picture is
+    deleted. Waits first while a process in `pause_for` runs."""
     while game_running(pause_for):
         time.sleep(5)
     out = os.path.join(scratch, f"{abs(hash(preset))}.png")
@@ -42,6 +45,8 @@ def run_one(render_png, preset, image, scratch, pause_for):
 
 
 def main():
+    """Finds every .slangp under the shaders folder, renders them in parallel (--jobs at a
+    time) and writes the results to the JSON file."""
     ap = argparse.ArgumentParser()
     ap.add_argument("shaders")
     ap.add_argument("image")

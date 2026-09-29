@@ -13,10 +13,14 @@
 //   #reference "../retroarch-shaders/crt/crt-royale.slangp"
 //   diffusion_weight = "0.004688"
 
+// Returns the companion's path for the ReShade preset file `reshade_preset`: the same path
+// with the extension .slangp instead of .ini.
 std::filesystem::path companion_path(const std::filesystem::path &reshade_preset);
 
-// Target of the first #reference line, resolved the way librashader resolves it
-// (against the companion's folder with symlinks and junctions resolved).
+// Reads the first #reference line of `companion` and puts the path written on it in
+// `target`, made absolute the way librashader does it: a relative path is taken from the
+// companion's folder, with symbolic links and junctions replaced by their targets. Returns
+// false if the file cannot be read or has no #reference line.
 bool read_reference(const std::filesystem::path &companion, std::filesystem::path &target);
 
 // Writes `companion` as a reference to `target` plus parameter values. The

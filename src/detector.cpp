@@ -1,6 +1,7 @@
 // Implementation of GridDetector (declared in detector.h): copies frames back from the GPU
 // through ReShade's API without making the game wait, runs detect_grid() (grid_detect.cpp)
-// on them on a worker thread, and decides which results replace the pixel grid in use.
+// on them on a worker thread, and replaces the pixel grid in use with the results the
+// rules allow.
 
 #include "detector.h"
 
@@ -22,7 +23,7 @@ GridDetector::GridDetector()
     worker_ = std::thread(&GridDetector::worker_main, this);
 }
 
-// Tells the worker thread to quit and waits for it (it finishes a detection it is running
+// Sets quit_ to stop the worker thread and waits for it (it finishes a detection it is running
 // first). GPU objects must have been released by shutdown() already.
 GridDetector::~GridDetector()
 {
@@ -210,8 +211,8 @@ void GridDetector::tick(device *dev, command_queue *queue, resource frame, doubl
     }
 }
 
-// Applies one detection result: records `log` for status() and decides whether `result`
-// replaces the grid in use, following the rules in the class comment in detector.h.
+// Applies one detection result: records `log` for status() and replaces the grid in use
+// with `result` if the rules in the class comment in detector.h allow it.
 void GridDetector::consume(const PixelGrid &result, const std::string &log)
 {
     ++detections_;

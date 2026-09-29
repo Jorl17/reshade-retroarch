@@ -2,9 +2,10 @@
 // Finds a game's native picture inside the full-size frame it presents. Many games draw
 // pixel art at a small "native" resolution (for example 320x224 or 424x240) and stretch it
 // to fill a 1080p or 4K window; RetroArch shaders need that small picture. detect_grid()
-// works out, from one frame in CPU memory, the native resolution and where the stretched
-// picture sits. It knows nothing about Direct3D: detector.h feeds it frames copied back
-// from the GPU, and the capture shader (capture.slang) uses its result to rebuild the small picture on the GPU.
+// finds, in one frame in CPU memory, the native resolution and where the stretched picture
+// sits. It does not use any graphics API: its frames come from detector.h, which
+// copies them back from the GPU, and the capture shader (capture.slang) uses its result to
+// rebuild the small picture on the GPU.
 
 #include <cstddef>
 #include <cstdint>

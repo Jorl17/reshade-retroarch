@@ -114,8 +114,8 @@ private:
     // The snapshot: a copy of the frame. Created "typeless" (bytes per pixel fixed, but
     // their meaning, plain or sRGB, left to each view) so snap_srv_ can read it as plain
     // values even when the frame is sRGB. snap_srv_ (a shader resource view: how shaders
-    // read a texture) is what the capture preset reads. snap_desc_ describes the copy and
-    // is compared with the next frame to decide when to recreate it.
+    // read a texture) is what the capture preset reads. snap_desc_ describes the copy; when
+    // the next frame's description differs, the copy is recreated.
     ID3D11Texture2D *snap_tex_ = nullptr;
     ID3D11ShaderResourceView *snap_srv_ = nullptr;
     D3D11_TEXTURE2D_DESC snap_desc_ = {};

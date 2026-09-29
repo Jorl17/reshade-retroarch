@@ -16,8 +16,8 @@
 // 3. The few device functions the add-on calls itself (VulkanFunctions).
 //
 // Every Vulkan call made through these goes through the Vulkan loader and so through
-// ReShade's layer, like the game's own calls: ReShade sees the add-on's (and librashader's)
-// command buffers and objects as if the game had made them.
+// ReShade's layer, like the game's own calls: ReShade handles the add-on's (and
+// librashader's) command buffers and objects as if the game had made them.
 
 #ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES // Vulkan functions are looked up at run time, never linked

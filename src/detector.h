@@ -2,8 +2,8 @@
 // GridDetector keeps the game's pixel grid (where its low-resolution picture sits in the
 // frame and at what resolution; see PixelGrid in grid_detect.h) up to date while the game
 // runs, without slowing rendering down. It copies a frame back from the GPU now and then,
-// runs detect_grid() on a worker thread, and decides whether each result replaces the grid
-// in use. The add-on (addon.cpp) has one per swap chain, ticks it every frame, and hands
+// runs detect_grid() on a worker thread, and replaces the grid in use with a result only
+// when the rules below allow it. The add-on (addon.cpp) has one per swap chain, ticks it every frame, and hands
 // grid() to the renderer, which uses it to rebuild the game's small picture. GPU work goes
 // through ReShade's API, so it works on every graphics API ReShade supports.
 
@@ -90,8 +90,8 @@ private:
     // Body of the worker thread: waits for a frame, runs detect_grid() on it, stores the
     // result, and repeats until quit_ is set.
     void worker_main();
-    // Decides whether one detection result replaces the grid in use (rules in the class
-    // comment) and keeps `log` for status().
+    // Replaces the grid in use with one detection result if the rules in the class comment
+    // allow it, and keeps `log` for status().
     void consume(const PixelGrid &result, const std::string &log);
     // Makes sure readback_ exists with the width, height and format of `desc`, recreating
     // it if not, and tries once to create fence_. Returns false if readback_ could not be

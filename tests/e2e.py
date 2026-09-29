@@ -151,6 +151,7 @@ def newest_dxc():
 
 
 def rmtree(path):
+    """Deletes the folder `path` and everything in it, read-only files included."""
     def make_writable_and_retry(func, p, _):
         os.chmod(p, stat.S_IWRITE)
         func(p)
@@ -253,8 +254,8 @@ def install(args, api, work, common):
         json.dump(manifest, f)
     env = {"VK_ADD_LAYER_PATH": work, "VK_INSTANCE_LAYERS": "VK_LAYER_reshade"}
     if args.vulkan_validation:
-        # The validation layer goes after ReShade in the list: further from the game, so it
-        # sees the calls ReShade and the add-on make too. Its messages go to a log file per
+        # The validation layer goes after ReShade in the list: further from the game, so
+        # the calls ReShade and the add-on make pass through it too. Its messages go to a log file per
         # run of the host (see host() in run_api).
         env["VK_ADD_LAYER_PATH"] = work + os.pathsep + os.path.abspath(args.vulkan_validation)
         env["VK_INSTANCE_LAYERS"] = "VK_LAYER_reshade" + os.pathsep + "VK_LAYER_KHRONOS_validation"

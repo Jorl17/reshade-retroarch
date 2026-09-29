@@ -1,4 +1,7 @@
 #pragma once
+// Access to librashader, the library that runs RetroArch shaders: loads librashader.dll
+// at run time and gives the table of its functions (libra::api()). Also includes the
+// graphics API headers librashader's own header needs.
 
 #ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES // Vulkan functions are looked up at run time, never linked
@@ -22,9 +25,13 @@
 // missing or mismatched DLL is reported instead of preventing ReShade from loading.
 namespace libra
 {
-// Loads librashader.dll from `dll_path`. Safe to call repeatedly.
+// Loads librashader.dll from `dll_path` and checks it is a version this code can use.
+// Returns false with `error` set (a message for the user) if it cannot. Does nothing once
+// it has succeeded, so it is safe to call repeatedly.
 bool load(const std::wstring &dll_path, std::string &error);
+// True once load() has succeeded.
 bool loaded();
+// librashader's functions (librashader_ld.h). Only valid after load() has succeeded.
 const libra_instance_t &api();
 
 // Turns a librashader error into text and frees it. Empty string for no error.

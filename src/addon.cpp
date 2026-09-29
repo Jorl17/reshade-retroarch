@@ -194,7 +194,7 @@ void load_settings()
     g_settings.manual_w = std::clamp(g_settings.manual_w, 16, 7680);
     g_settings.manual_h = std::clamp(g_settings.manual_h, 16, 4320);
 
-    // ShaderPaths: extra folders to search for presets. The first call asks for the value's
+    // ShaderPaths: extra folders to search for presets. The first call gets the value's
     // size. ReShade splits values on ',' and returns the parts separated by '\0', so '\0',
     // ';' and ',' all separate folders here.
     size_t size = 0;
@@ -230,7 +230,8 @@ void save_settings()
 }
 
 // Starts a background search for shader presets (see Scan), unless one is already running.
-// The results reach g_roots and g_presets once poll_scan() sees the search has finished.
+// The results are copied to g_roots and g_presets by poll_scan(), once the search has
+// finished.
 void start_scan()
 {
     if (g_scan != nullptr)
@@ -725,13 +726,14 @@ void on_reshade_present(effect_runtime *runtime)
 // Everything below runs from draw_overlay(), which holds g_mutex.
 
 // Returns true if the preset file `target` is inside the game's folder or the add-on's
-// folder (compared case-insensitively, with links and ".." resolved where possible). The
+// folder (compared case-insensitively, with links and ".." replaced by the real folders
+// where possible). The
 // companion .slangp then refers to it with a relative path, so the folder can be moved
 // with its shaders. Presets in shared places, such as a RetroArch install, get an absolute
 // path instead, so the .slangp still works when copied to another game.
 bool reference_relative(const fs::path &target)
 {
-    // A path's comparable form: resolved as far as it exists, in lower case.
+    // A path's comparable form: the real path of as much of it as exists, in lower case.
     auto key = [](const fs::path &p) {
         std::error_code ec;
         const fs::path c = fs::weakly_canonical(p, ec);

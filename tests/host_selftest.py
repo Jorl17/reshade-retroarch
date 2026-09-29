@@ -45,6 +45,9 @@ def ramp(w, h):
 
 
 def main():
+    """Makes the test pictures, runs the host once per API, format and (with --warp)
+    software renderer, compares what it shows with the pictures, and prints one line per
+    run. Exit code 1 if any run failed."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", default=os.path.join(REPO, "out", "build"))
     ap.add_argument("--work", default=os.path.join(REPO, "out", "host-selftest"))
@@ -68,14 +71,15 @@ def main():
     def p(name):
         return os.path.join(work, name)
 
-    # frame: (what is on screen, expected picture or None for black)
+    # Frames at which the host saves what it shows, and the picture expected there (None:
+    # black, because the picture given at frame 30 does not fit the back buffer).
     shots = {5: "ramp_1080", 15: "game_1080", 25: "game_4k", 32: None, 40: "ramp_720"}
     script = ["--image", "0:" + p("ramp_1080.png"),
               "--image", "10:" + p("game_1080.png"),
               "--resize", "20:3840x2160", "--image", "20:" + p("game_4k.png"),
               "--image", "30:" + p("game_1080.png"),  # wrong size for the back buffer: black
               "--resize", "35:1280x720", "--image", "35:" + p("ramp_720.png")]
-    sizes = {32: (3840, 2160)}
+    sizes = {32: (3840, 2160)}  # back buffer size at the frames expected black
 
     runs = [] if args.warp_only else [(api, fmt, hdr, False) for api in APIS for fmt, hdr in FORMATS]
     if args.warp or args.warp_only:

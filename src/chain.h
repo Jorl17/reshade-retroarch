@@ -35,8 +35,8 @@ bool read_preset_params(const std::string &preset_path, std::vector<ShaderParam>
 // them, as (name, value) pairs in `current`'s order; a parameter missing from `base` is
 // always included, and values within 1e-6 count as equal.
 // This is what a companion .slangp has to store. (A companion is the small .slangp the
-// add-on writes next to a ReShade preset: a #reference line naming the preset the user
-// picked, which is `base`, plus the parameters the user changed; see companion.h.)
+// add-on writes next to a ReShade preset: a #reference line with the path of the preset
+// the user picked, which is `base`, plus the parameters the user changed; see companion.h.)
 // `current` normally comes from the chain compiled from the companion itself, so values
 // saved there earlier still differ from `base` and are kept, and values moved back to
 // the base value drop out.

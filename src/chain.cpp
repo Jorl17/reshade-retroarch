@@ -94,7 +94,7 @@ bool ShaderChain::supports(GraphicsApi api)
            api == GraphicsApi::opengl || api == GraphicsApi::vulkan;
 }
 
-// Finds an OpenGL function for librashader: wglGetProcAddress knows the functions added
+// Finds an OpenGL function for librashader: wglGetProcAddress returns the functions added
 // after OpenGL 1.1, GetProcAddress on opengl32.dll the 1.1 ones (wglGetProcAddress
 // returns small non-null values for some failures, which count as "not found").
 // opengl32.dll is the one the game has loaded; it is looked up at run time so the add-on

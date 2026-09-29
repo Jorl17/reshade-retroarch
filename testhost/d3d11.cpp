@@ -60,7 +60,7 @@ public:
         const bool bitblt = o.format == Format::rgba8srgb;
         sd.BufferCount = bitblt ? 1 : 2;
         sd.SwapEffect = bitblt ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        // A specific GPU when --adapter asks for one (the driver type must then be "unknown").
+        // The GPU given with --adapter, if any (the driver type must then be "unknown").
         IDXGIAdapter1 *adapter = nullptr;
         if (o.adapter >= 0)
         {

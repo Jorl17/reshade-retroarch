@@ -5,7 +5,7 @@
 // A "companion .slangp" is the RetroArch preset file the add-on keeps next to a ReShade
 // preset: "<ReShade preset>.slangp" beside "<ReShade preset>.ini". While that ReShade
 // preset is selected, the add-on runs it. The add-on writes it as a "#reference" line
-// naming the preset the user picked, plus the parameter values the user changed:
+// with the path of the preset the user picked, plus the parameter values the user changed:
 //
 //   #reference "../retroarch-shaders/crt/crt-royale.slangp"
 //   diffusion_weight = "0.004688"

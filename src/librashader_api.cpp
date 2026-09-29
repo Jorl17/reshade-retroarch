@@ -7,9 +7,9 @@
 
 namespace
 {
-std::mutex g_mutex;
-libra_instance_t g_api = {};
-bool g_loaded = false;
+std::mutex g_mutex;        // protects the two below and load_d3d12_compiler's state
+libra_instance_t g_api = {}; // librashader's functions, filled by load()
+bool g_loaded = false;     // load() has succeeded
 }
 
 bool libra::load(const std::wstring &dll_path, std::string &error)

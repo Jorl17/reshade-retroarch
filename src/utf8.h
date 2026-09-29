@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <string>
 
+// Returns the path whose name is the UTF-8 text `s`. Invalid bytes become the replacement
+// character U+FFFD.
 inline std::filesystem::path path_from_utf8(const std::string &s)
 {
     // Without MB_ERR_INVALID_CHARS, invalid bytes become U+FFFD instead of failing.
@@ -20,6 +22,8 @@ inline std::filesystem::path path_from_utf8(const std::string &s)
     return std::filesystem::path(std::move(w));
 }
 
+// Returns path `p` as UTF-8 text, with backslashes, or with forward slashes when
+// `generic` is set (as .slangp files write paths). Unpaired surrogates become U+FFFD.
 inline std::string utf8_from_path(const std::filesystem::path &p, bool generic = false)
 {
     std::wstring w = generic ? p.generic_wstring() : p.wstring();

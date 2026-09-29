@@ -22,8 +22,8 @@ as HD side art, are left alone.
    [Microsoft's DirectXShaderCompiler releases](https://github.com/microsoft/DirectXShaderCompiler/releases)
    and copy `bin\x64\dxcompiler.dll` and `bin\x64\dxil.dll` next to
    `RetroArchShaders.addon64`. Without them the add-on leaves Direct3D 12 games untouched
-   and says so. (Not sure which your game uses? The RetroArch Shaders window tells you
-   if it needs them.)
+   and says so. (Not sure which your game uses? The RetroArch Shaders window shows a
+   message if it needs them.)
 
 ## Use
 

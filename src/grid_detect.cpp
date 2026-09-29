@@ -627,8 +627,8 @@ bool grid_continues(const FrameView &f, const Span &sx, const Span &sy, std::str
 // Steps: estimate the horizontal period from edges between columns; estimate the vertical
 // period from edges between rows, counted only where the regular columns were found; find
 // bars; list candidate placements on each axis; validate every plausible pair and pick one;
-// reject it if its grid carries on past its edges. Each early return tells `log` which
-// step failed.
+// reject it if its grid carries on past its edges. Each early return writes to `log`
+// which step failed.
 PixelGrid detect_grid(const FrameView &f, std::string *log)
 {
     PixelGrid g;

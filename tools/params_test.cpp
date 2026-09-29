@@ -1,5 +1,5 @@
-// Tests how the add-on reads shader parameters and decides what its "Save" button
-// writes (read_preset_params and param_overrides in src/chain.h, write_companion in
+// Tests how the add-on reads shader parameters and what its "Save" button writes
+// (read_preset_params and param_overrides in src/chain.h, write_companion in
 // src/companion.h). Uses librashader (librashader.dll next to this executable) only to
 // parse presets, so no GPU is needed.
 //

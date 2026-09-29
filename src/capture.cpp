@@ -14,7 +14,7 @@ namespace fs = std::filesystem;
 namespace
 {
 // Writes `text` to `path` unless the file already holds exactly that text. Writes to a
-// temporary name first and renames, so another process reading the file never sees
+// temporary name first and renames, so another process reading the file never reads
 // half of it. Returns false if the file cannot be written.
 bool write_if_different(const fs::path &path, const std::string &text)
 {

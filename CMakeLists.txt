@@ -44,16 +44,20 @@ set_target_properties(RetroArchShaders PROPERTIES PREFIX "" SUFFIX ".addon64")
 target_include_directories(RetroArchShaders SYSTEM PRIVATE third_party/reshade third_party/imgui)
 target_link_libraries(RetroArchShaders PRIVATE rra_core)
 
-# Tools and tests.
+# Tools and tests (see "Build and test" in README.md).
+# detect_test: runs the grid detection on PNG frames and checks the rules for replacing a grid.
 add_executable(detect_test tools/detect_test.cpp)
 target_link_libraries(detect_test PRIVATE rra_core windowscodecs ole32)
 
+# files_test: companion files and the search for presets.
 add_executable(files_test tools/files_test.cpp)
 target_link_libraries(files_test PRIVATE rra_core)
 
+# params_test: reading and saving preset parameters.
 add_executable(params_test tools/params_test.cpp)
 target_link_libraries(params_test PRIVATE rra_core)
 
+# render_png: runs a preset on a PNG offline, as the add-on does (Direct3D 11, 12 or 9).
 add_executable(render_png tools/render_png.cpp tools/render_d3d12.cpp tools/render_d3d9.cpp)
 target_link_libraries(render_png PRIVATE rra_core d3d12 d3d9 windowscodecs ole32)
 
@@ -62,10 +66,12 @@ add_executable(test_host testhost/main.cpp testhost/d3d9.cpp testhost/d3d10.cpp 
                testhost/d3d12.cpp testhost/opengl.cpp testhost/vulkan.cpp)
 target_include_directories(test_host SYSTEM PRIVATE third_party/vulkan)
 target_link_libraries(test_host PRIVATE d3d9 d3d10 d3d11 d3d12 dxgi opengl32 gdi32 windowscodecs ole32 user32 delayimp)
-# Load only the API in use, like a real game (and so ReShade sees only that API).
+# Load only the API in use, like a real game (so ReShade hooks only that API).
 target_link_options(test_host PRIVATE /DELAYLOAD:d3d9.dll /DELAYLOAD:d3d10.dll /DELAYLOAD:d3d11.dll
                     /DELAYLOAD:d3d12.dll /DELAYLOAD:dxgi.dll /DELAYLOAD:opengl32.dll)
 
+# TestCapture: a second ReShade add-on used by tests/e2e.py; takes screenshots and switches
+# presets at given frames.
 add_library(TestCapture SHARED tools/test_capture_addon.cpp)
 set_target_properties(TestCapture PROPERTIES PREFIX "" SUFFIX ".addon64")
 target_include_directories(TestCapture SYSTEM PRIVATE third_party/reshade third_party/imgui)

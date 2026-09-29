@@ -180,7 +180,7 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
 
-    // Decide where the native image is. "auto" runs the add-on's grid detector on the
+    // Where the native image is: "auto" runs the add-on's grid detector on the
     // input and fails (exit 1) if it finds none; "frame" and "WxH" cover the whole frame.
     PixelGrid grid;
     if (grid_mode == L"auto")
