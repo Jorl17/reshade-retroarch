@@ -129,6 +129,7 @@ fetches the pinned `librashader.dll`.
 |---|---|
 | `python tests/make_synthetic.py --procedural out/s` then `out/build/detect_test out/s/manifest.txt` | Detection on generated frames. |
 | `out/build/detect_test --rules` | Which detections may replace the grid in use. |
+| `python tests/host_selftest.py` | The test host (a stand-in game for D3D9/10/11/12 and OpenGL) shows its pictures byte for byte on every API and format. |
 | `out/build/files_test`, `out/build/params_test` | Preset files, discovery, saving parameters. |
 | `python tests/e2e.py ...` | The add-on inside real ReShade (needs a GPU). |
 | `python tests/compat_sweep.py ...` | Loads every preset in a shader folder. |

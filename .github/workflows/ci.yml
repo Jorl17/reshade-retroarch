@@ -38,6 +38,10 @@ jobs:
           out/build/detect_test.exe out/synthetic/manifest.txt
           out/build/detect_test.exe --rules
 
+      - name: Test host draws identical frames (software Direct3D)
+        shell: bash
+        run: python tests/host_selftest.py --warp-only
+
       - name: File handling tests
         shell: bash
         run: out/build/files_test.exe
