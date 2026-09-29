@@ -1,0 +1,14 @@
+Put RetroArch slang shaders in this folder.
+
+The easiest start is the libretro collection:
+  https://github.com/libretro/slang-shaders  (Code -> Download ZIP)
+Extract it here, so you get retroarch-shaders\slang-shaders\...
+
+Preset packs (CyberLab, Mega Bezel, ...) go here too, laid out the way the pack
+expects to sit in RetroArch's shaders_slang folder.
+
+If RetroArch is installed, its shaders are found automatically and this folder
+can stay empty.
+
+Then start the game, press Home, open the "RetroArch Shaders" tab, pick a preset
+and press "Use for this ReShade preset".

@@ -1,6 +1,7 @@
 """Generates grid-detection test frames with known answers.
 
     python make_synthetic.py <native.png> <out_dir>
+    python make_synthetic.py --procedural <out_dir>     (generated 424x240 pixel art, used in CI)
 
 Writes PNGs plus manifest.txt with one line per case:
     <valid 0|1> <native_w> <native_h> <rect_x> <rect_y> <rect_w> <rect_h> <file>
@@ -50,6 +51,35 @@ def hd_art(h, w, seed):
     return np.clip(base + rng.integers(-20, 20, (h, w, 3)), 0, 255).astype(np.uint8)
 
 
+def procedural_native(w=424, h=240, seed=7):
+    """Pixel art stand-in for a game frame: banded sky, clouds, tiled ground, sprites."""
+    rng = np.random.default_rng(seed)
+    img = np.zeros((h, w, 3), np.uint8)
+    sky = np.array([[36, 72, 216], [60, 108, 232], [96, 144, 240], [144, 184, 248]], np.uint8)
+    horizon = h * 5 // 8
+    for y in range(horizon):
+        img[y, :] = sky[min(3, y * 4 // horizon)]
+    for _ in range(6):  # clouds: flat blobs with a darker edge
+        cx, cy, rx, ry = rng.integers(0, w), rng.integers(8, horizon - 24), rng.integers(12, 40), rng.integers(4, 10)
+        yy, xx = np.mgrid[0:h, 0:w]
+        d = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+        img[d < 1.0] = [200, 208, 232]
+        img[d < 0.6] = [248, 248, 248]
+    palette = rng.integers(0, 256, (4, 3), dtype=np.uint8)
+    tiles = rng.integers(0, 4, (3, 16, 16))
+    for ty in range(horizon, h, 16):
+        for tx in range(0, w, 16):
+            t = palette[tiles[rng.integers(0, 3)]]
+            img[ty:ty + 16, tx:tx + 16] = t[:h - ty, :w - tx]
+    for _ in range(5):  # sprites
+        sw, sh = rng.integers(16, 33), rng.integers(24, 41)
+        x, y = rng.integers(0, w - sw), rng.integers(horizon - sh, h - sh)
+        spal = rng.integers(0, 256, (3, 3), dtype=np.uint8)
+        mask = rng.random((sh, sw)) < 0.8
+        img[y:y + sh, x:x + sw][mask] = spal[rng.integers(0, 3, (sh, sw))][mask]
+    return img
+
+
 def place(frame_w, frame_h, img, x, y, background):
     if isinstance(background, np.ndarray):
         frame = background.copy()
@@ -60,9 +90,13 @@ def place(frame_w, frame_h, img, x, y, background):
 
 
 def main():
-    native = np.asarray(Image.open(sys.argv[1]).convert("RGB"))
     out = sys.argv[2]
     os.makedirs(out, exist_ok=True)
+    if sys.argv[1] == "--procedural":
+        native = procedural_native()
+        Image.fromarray(native).save(os.path.join(out, "native.png"))
+    else:
+        native = np.asarray(Image.open(sys.argv[1]).convert("RGB"))
     nh, nw = native.shape[:2]
     cases = []
 

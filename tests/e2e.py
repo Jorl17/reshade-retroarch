@@ -13,8 +13,10 @@ TestCapture add-on, so it never needs keyboard focus):
   4. game switches to 4:3 pillarbox with HD art   -> 320-wide grid re-detected,
                                                      side art untouched
   5. swap chain resized to 1080p                  -> re-detected, matches offline
-Then a second run without librashader.dll: the frame must be untouched and the
-reason logged.
+Then separate runs:
+  7. 10-bit SDR back buffer                        -> matches an offline render
+  8. HDR10 output                                  -> frame untouched, reason logged
+  9. no librashader.dll                            -> frame untouched, reason logged
 
 The only effect file installed is the placeholder RetroArchShaders.fx, which also
 checks that the add-on runs when no other ReShade effects are present.
@@ -22,6 +24,7 @@ checks that the add-on runs when no other ReShade effects are present.
 import argparse
 import os
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -67,7 +70,11 @@ def main():
 
     work = os.path.abspath(args.work)
     if os.path.isdir(work):
-        shutil.rmtree(work)
+        def make_writable_and_retry(func, path, _):
+            os.chmod(path, stat.S_IWRITE)  # read-only files (e.g. from an older run that copied .git)
+            func(path)
+
+        shutil.rmtree(work, onerror=make_writable_and_retry)
     os.makedirs(os.path.join(work, "shots"))
     os.makedirs(os.path.join(work, "presets"))
     os.makedirs(os.path.join(work, "reshade-shaders", "Shaders"))
@@ -77,7 +84,7 @@ def main():
     shutil.copy(args.reshade, os.path.join(work, "d3d11.dll"))
     shutil.copy(os.path.join(REPO, "package", "reshade-shaders", "Shaders", "RetroArchShaders.fx"),
                 os.path.join(work, "reshade-shaders", "Shaders"))
-    shutil.copytree(args.shaders, os.path.join(work, "retroarch-shaders"))
+    shutil.copytree(args.shaders, os.path.join(work, "retroarch-shaders"), ignore=shutil.ignore_patterns(".git"))
 
     ref = "../retroarch-shaders/" + args.preset.replace("\\", "/")
     for name in ["A", "B", "C"]:
@@ -152,16 +159,43 @@ def main():
         results.append((ok, "5 pillarbox side art          == untouched", "exact" if ok else "changed"))
     check("6 resized to 1080p            == offline render", w("shots", "6.png"), w("exp_full1080.png"))
 
-    # Second run: no librashader.dll.
-    os.remove(w("librashader.dll"))
+    # 10-bit back buffers: SDR gets the shader, HDR10 is left alone (and says why).
+    # Values go through 10 bits and back, so allow off-by-one rounding.
+    def close(shot, expected, label):
+        if not os.path.exists(shot):
+            results.append((False, label, "no screenshot"))
+            return
+        A, B = load(shot), load(expected)
+        off = (np.abs(A - B) > 1).any(2)
+        n = int(off.sum())
+        results.append((n <= MAX_DIFF_PIXELS_FRACTION * off.size, label, f"{n} px differ by more than 1"))
+
     env = dict(os.environ, RRA_TEST_SCRIPT=f"250:shot={w('shots', '7.png')}")
+    subprocess.run([w("test_host.exe"), "--frames", "300", "--format", "rgb10a2", "--image", "0:" + w("full4k.png")],
+                   env=env, cwd=work, check=True, capture_output=True)
+    close(w("shots", "7.png"), w("exp_full4k.png"), "7 10-bit SDR back buffer       == offline render")
+
+    env = dict(os.environ, RRA_TEST_SCRIPT=f"250:shot={w('shots', '8.png')}")
+    r = subprocess.run([w("test_host.exe"), "--frames", "300", "--format", "rgb10a2", "--hdr10", "1",
+                        "--image", "0:" + w("full4k.png")], env=env, cwd=work, capture_output=True, text=True)
+    if r.returncode == 3:
+        results.append((True, "8 HDR10 output                == untouched", "skipped: HDR10 not available here"))
+    else:
+        close(w("shots", "8.png"), w("full4k.png"), "8 HDR10 output                == untouched")
+        with open(w("ReShade.log"), encoding="utf-8", errors="ignore") as f:
+            logged = "HDR output is not supported" in f.read()
+        results.append((logged, "8 HDR refusal reported in ReShade.log", "yes" if logged else "no"))
+
+    # Last run: no librashader.dll.
+    os.remove(w("librashader.dll"))
+    env = dict(os.environ, RRA_TEST_SCRIPT=f"250:shot={w('shots', '9.png')}")
     subprocess.run([w("test_host.exe"), "--frames", "300", "--image", "0:" + w("full4k.png")],
                    env=env, cwd=work, check=True, capture_output=True)
-    check("7 librashader.dll missing     == untouched", w("shots", "7.png"), w("full4k.png"), exact=True)
+    check("9 librashader.dll missing     == untouched", w("shots", "9.png"), w("full4k.png"), exact=True)
     with open(w("ReShade.log"), encoding="utf-8", errors="ignore") as f:
         log = f.read()
     logged = "librashader.dll not found" in log
-    results.append((logged, "7 missing DLL reported in ReShade.log", "yes" if logged else "no"))
+    results.append((logged, "9 missing DLL reported in ReShade.log", "yes" if logged else "no"))
 
     for ok, label, detail in results:
         print(f"{'PASS' if ok else 'FAIL'}  {label}  ({detail})")

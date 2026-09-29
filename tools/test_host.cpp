@@ -4,17 +4,21 @@
 // frames, drawing PNGs into the back buffer. Resolution changes are scripted:
 //
 //   test_host --frames N [--size WxH] [--image F:path.png]... [--resize F:WxH]...
+//             [--format rgba8|rgb10a2] [--hdr10 1]
 //
 // --image F:path   from frame F, draw this image (it must match the back buffer
 //                  size; mismatched frames are cleared to black)
 // --resize F:WxH   at frame F, resize the swap chain buffers (like a game switching
 //                  resolution or toggling fullscreen)
+// --format         back buffer format (default rgba8)
+// --hdr10 1        switch the swap chain to HDR10 (ST.2084), like a game with HDR on
 //
 // Put ReShade's d3d11.dll (and any add-ons) next to this executable.
 
 #include "png_io.h"
 
 #include <d3d11.h>
+#include <dxgi1_4.h>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -47,6 +51,8 @@ int wmain(int argc, wchar_t **argv)
     UINT bw = 3840, bh = 2160;
     std::map<int, std::wstring> image_at;
     std::map<int, std::pair<UINT, UINT>> resize_at;
+    DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    bool hdr10 = false;
     for (int a = 1; a + 1 < argc; ++a)
     {
         const std::wstring opt = argv[a], val = argv[a + 1];
@@ -54,6 +60,10 @@ int wmain(int argc, wchar_t **argv)
         const size_t colon = val.find(L':');
         if (opt == L"--frames")
             frames = _wtoi(val.c_str());
+        else if (opt == L"--format")
+            format = val == L"rgb10a2" ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+        else if (opt == L"--hdr10")
+            hdr10 = val == L"1";
         else if (opt == L"--size")
             swscanf_s(val.c_str(), L"%ux%u", &bw, &bh);
         else if (opt == L"--image" && colon != std::wstring::npos)
@@ -81,7 +91,7 @@ int wmain(int argc, wchar_t **argv)
     sd.BufferDesc.Width = bw;
     sd.BufferDesc.Height = bh;
     sd.BufferDesc.RefreshRate = {60, 1};
-    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.Format = format;
     sd.SampleDesc.Count = 1;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.BufferCount = 2;
@@ -97,6 +107,19 @@ int wmain(int argc, wchar_t **argv)
     {
         fprintf(stderr, "D3D11CreateDeviceAndSwapChain failed 0x%08lX\n", hr);
         return 1;
+    }
+    if (hdr10)
+    {
+        IDXGISwapChain3 *swap3 = nullptr;
+        HRESULT ch = swap->QueryInterface(IID_PPV_ARGS(&swap3));
+        if (SUCCEEDED(ch))
+        {
+            ch = swap3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+            swap3->Release();
+        }
+        printf("HDR10 colour space: 0x%08lX\n", ch);
+        if (FAILED(ch))
+            return 3;
     }
 
     std::map<std::wstring, Image> images;
@@ -116,10 +139,17 @@ int wmain(int argc, wchar_t **argv)
         td.Height = img.h;
         td.MipLevels = 1;
         td.ArraySize = 1;
-        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.Format = format; // same as the back buffer, for CopyResource
         td.SampleDesc.Count = 1;
         td.Usage = D3D11_USAGE_IMMUTABLE;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (format == DXGI_FORMAT_R10G10B10A2_UNORM)
+            for (size_t p = 0; p < rgba.size(); p += 4)
+            {
+                auto c10 = [&](size_t c) { return uint32_t((rgba[p + c] * 1023u + 127u) / 255u); };
+                const uint32_t v = c10(0) | c10(1) << 10 | c10(2) << 20 | 3u << 30;
+                memcpy(&rgba[p], &v, 4);
+            }
         const D3D11_SUBRESOURCE_DATA init = {rgba.data(), img.w * 4, 0};
         if (FAILED(dev->CreateTexture2D(&td, &init, &img.tex)))
             return nullptr;

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # only used to publish a release for v* tags
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # for git describe in the zip name
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        shell: bash
+        run: python -m pip install numpy pillow
+
+      - name: Build
+        shell: cmd
+        run: build.bat
+
+      # GPU tests (render_png, e2e.py) need a real GPU and ReShade, so they run locally.
+      - name: Grid detection tests
+        shell: bash
+        run: |
+          python tests/make_synthetic.py --procedural out/synthetic
+          out/build/detect_test.exe out/synthetic/manifest.txt
+
+      - name: Package
+        shell: bash
+        run: python tools/package.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RetroArchShaders
+          path: out/package/*.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/package/*.zip --generate-notes

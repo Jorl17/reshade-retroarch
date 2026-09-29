@@ -72,6 +72,7 @@ struct RuntimeData
     bool retry = false;        // companion reappeared: recompile if the last attempt failed
     bool warned_paused = false;
     std::string status, error;
+    std::string logged_error; // the last error written to ReShade.log, so each one is logged once
 };
 
 HMODULE g_module = nullptr;
@@ -82,6 +83,7 @@ bool g_settings_loaded = false;
 std::mutex g_mutex;
 std::unordered_map<device *, std::unique_ptr<DeviceData>> g_devices;
 std::unordered_map<effect_runtime *, std::unique_ptr<RuntimeData>> g_runtimes;
+std::unordered_map<uint64_t, swapchain *> g_swapchains; // by native handle, to read the output colour space
 
 // Shader discovery, run in the background when the overlay is first opened.
 std::vector<ShaderRoot> g_roots;
@@ -234,6 +236,36 @@ void on_destroy_effect_runtime(effect_runtime *runtime)
     rd->detector.shutdown(reinterpret_cast<ID3D11DeviceContext *>(cmd->get_native()));
 }
 
+// Shown in the overlay, and logged once (the overlay is not open most of the time).
+void set_error(RuntimeData &rd, const std::string &error)
+{
+    rd.error = error;
+    if (error != rd.logged_error)
+        log_error("RetroArch Shaders: " + error);
+    rd.logged_error = error;
+}
+
+void on_init_swapchain(swapchain *sc, bool)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_swapchains[sc->get_native()] = sc;
+}
+
+void on_destroy_swapchain(swapchain *sc, bool)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_swapchains.erase(sc->get_native());
+}
+
+bool hdr_output(effect_runtime *runtime)
+{
+    const auto it = g_swapchains.find(runtime->get_native());
+    if (it == g_swapchains.end())
+        return false;
+    const color_space cs = it->second->get_color_space();
+    return cs == color_space::scrgb || cs == color_space::hdr10_pq || cs == color_space::hdr10_hlg;
+}
+
 void on_destroy_device(device *dev)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -276,7 +308,7 @@ bool prepare(RuntimeData &rd, device *dev, ID3D11Device *d3d)
     {
         if (!dd->renderer.init(d3d, err))
         {
-            rd.error = err;
+            set_error(rd, err);
             return false;
         }
         dd->renderer_ready = true;
@@ -333,7 +365,12 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
     device *dev = runtime->get_device();
     if (dev->get_api() != device_api::d3d11)
     {
-        rd->error = "Only Direct3D 11 games are supported for now.";
+        set_error(*rd, "Only Direct3D 11 games are supported for now.");
+        return;
+    }
+    if (hdr_output(runtime))
+    {
+        set_error(*rd, "HDR output is not supported yet. Turn HDR off in the game to use RetroArch shaders.");
         return;
     }
     auto *d3d = reinterpret_cast<ID3D11Device *>(dev->get_native());
@@ -360,7 +397,7 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
     ID3D11Texture2D *snapshot = dd.renderer.snapshot(ctx, target, err);
     if (snapshot == nullptr)
     {
-        rd->error = err;
+        set_error(*rd, err);
         return;
     }
 
@@ -388,7 +425,7 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
 
     if (!dd.renderer.render(ctx, grid, dd.chain, target, rd->frame++, err))
     {
-        rd->error = err;
+        set_error(*rd, err);
         return;
     }
     rd->error.clear();
@@ -406,7 +443,7 @@ void on_reshade_present(effect_runtime *runtime)
     const double t = now_seconds();
     if (t - rd->last_effects > 2.0 && t - rd->created > 5.0)
     {
-        rd->status = "Paused: ReShade is not rendering effects. They may be switched off (End key), or no effect "
+        rd->status = "Paused: ReShade is not rendering effects. They may be switched off (Effect toggle key), or no effect "
                      "files are installed; keep reshade-shaders\\Shaders\\RetroArchShaders.fx.";
         if (!rd->warned_paused)
         {
@@ -644,6 +681,8 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE)
     reshade::register_event<reshade::addon_event::init_effect_runtime>(on_init_effect_runtime);
     reshade::register_event<reshade::addon_event::destroy_effect_runtime>(on_destroy_effect_runtime);
     reshade::register_event<reshade::addon_event::destroy_device>(on_destroy_device);
+    reshade::register_event<reshade::addon_event::init_swapchain>(on_init_swapchain);
+    reshade::register_event<reshade::addon_event::destroy_swapchain>(on_destroy_swapchain);
     reshade::register_event<reshade::addon_event::reshade_set_current_preset_path>(on_set_current_preset_path);
     reshade::register_event<reshade::addon_event::reshade_begin_effects>(on_begin_effects);
     reshade::register_event<reshade::addon_event::reshade_present>(on_reshade_present);
@@ -657,6 +696,7 @@ extern "C" __declspec(dllexport) void AddonUninit(HMODULE addon_module, HMODULE)
         std::lock_guard<std::mutex> lock(g_mutex);
         g_runtimes.clear(); // joins detector threads
         g_devices.clear();
+        g_swapchains.clear();
     }
     if (g_scan.valid())
         g_scan.wait();
