@@ -199,7 +199,7 @@ int wmain(int argc, wchar_t **argv)
     Renderer renderer;
     ShaderChain chain;
     const auto t0 = std::chrono::steady_clock::now();
-    if (!renderer.init(dev, err) || !chain.create(dev, narrow(argv[1]), err))
+    if (!renderer.init(dev, err) || !chain.create(ChainDevice{GraphicsApi::d3d11, reinterpret_cast<uint64_t>(dev)}, narrow(argv[1]), err))
     {
         fprintf(stderr, "%s\n", err.c_str());
         return 1;

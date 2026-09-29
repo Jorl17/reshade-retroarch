@@ -4,11 +4,13 @@
 // runs, without slowing rendering down. It copies a frame back from the GPU now and then,
 // runs detect_grid() on a worker thread, and decides whether each result replaces the grid
 // in use. The add-on (addon.cpp) has one per swap chain, ticks it every frame, and hands
-// grid() to the renderer, which uses it to rebuild the game's small picture.
+// grid() to the renderer, which uses it to rebuild the game's small picture. GPU work goes
+// through ReShade's API, so it works on every graphics API ReShade supports.
 
 #include "grid_detect.h"
 
-#include <d3d11.h>
+#include <reshade_api_device.hpp>
+
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -16,10 +18,12 @@
 
 // Keeps track of the game's native pixel grid while it runs.
 //
-// How a detection runs: tick() copies the frame into a staging texture (a texture whose
+// How a detection runs: tick() copies the frame into a readback texture (a texture whose
 // memory the CPU is allowed to read), on later frames checks without waiting whether the
-// GPU has finished that copy, and then hands the copied pixels to a worker thread that runs
-// detect_grid(). So the render thread never waits for the GPU or for detection. A new copy
+// GPU has finished that copy (with a fence: a marker the GPU reaches after the copy; on
+// APIs without fences, by waiting a few frames), and then hands the copied pixels to a
+// worker thread that runs detect_grid(). So the render thread never waits for the GPU or
+// for detection. A new copy
 // starts 1 second after the previous one while a confirmed grid is known, and 0.25 seconds
 // after it while there is none.
 //
@@ -48,17 +52,18 @@ public:
     // Advances detection by one step; call it every frame while automatic detection is on.
     // Depending on where the current detection is, it starts a copy of `frame`, hands a
     // finished copy to the worker, or collects the worker's result and updates grid().
-    // `frame` holds the game's frame; it must be single-sample (not multisampled) and 4
-    // bytes per pixel. The add-on passes its snapshot, a copy of the frame it makes every
-    // frame (Renderer::snapshot in renderer.cpp). `ctx` must be the immediate context (the
-    // one that runs commands right away): reading GPU memory back is impossible on a
-    // deferred one. `now` is the current time in seconds, used to space detections out.
-    void tick(ID3D11Device *device, ID3D11DeviceContext *ctx, ID3D11Texture2D *frame, double now);
+    // `frame` holds the game's frame; it must be single-sample (not multisampled), 4 bytes
+    // per pixel, and in the shader_resource state. The add-on passes its snapshot, a copy
+    // of the frame it makes every frame (FrameRenderer::snapshot in frame_renderer.h).
+    // Commands go to `queue`'s immediate command list. `now` is the current time in
+    // seconds, used to space detections out.
+    void tick(reshade::api::device *device, reshade::api::command_queue *queue, reshade::api::resource frame,
+              double now);
 
     // Releases GPU resources, first waiting for a detection that is still reading them.
-    // Must be called on the render thread before the device or context go away. The grid
-    // is kept, so that after a swap chain resize the next tick() rescales it.
-    void shutdown(ID3D11DeviceContext *ctx);
+    // Must be called on the render thread before `device` goes away. The grid is kept, so
+    // that after a swap chain resize the next tick() rescales it.
+    void shutdown(reshade::api::device *device);
 
     // Forgets the current grid and detects again as soon as possible. A detection already
     // under way finishes, but its result is thrown away.
@@ -78,8 +83,8 @@ private:
     enum class Stage
     {
         idle,      // nothing in flight
-        copied,    // frame copy to the staging texture issued, waiting for the GPU to finish it
-        analysing, // staging texture mapped (readable by the CPU), worker thread detecting
+        copied,    // frame copy to the readback texture issued, waiting for the GPU to finish it
+        analysing, // readback texture mapped (readable by the CPU), worker thread detecting
     };
 
     // Body of the worker thread: waits for a frame, runs detect_grid() on it, stores the
@@ -88,9 +93,12 @@ private:
     // Decides whether one detection result replaces the grid in use (rules in the class
     // comment) and keeps `log` for status().
     void consume(const PixelGrid &result, const std::string &log);
-    // Makes sure staging_ exists with the width, height and format in `desc`, recreating it
-    // if not. Returns false if it could not be created.
-    bool ensure_staging(ID3D11Device *device, const D3D11_TEXTURE2D_DESC &desc);
+    // Makes sure readback_ exists with the width, height and format of `desc`, recreating
+    // it if not, and tries once to create fence_. Returns false if readback_ could not be
+    // created.
+    bool ensure_readback(reshade::api::device *device, const reshade::api::resource_desc &desc);
+    // Releases readback_ and fence_ (after unmapping readback_ if `mapped`).
+    void release(reshade::api::device *device, bool mapped);
 
     // Worker thread handoff. The flags and job_* fields are shared with the worker and
     // protected by mutex_; cv_ wakes the worker when a job or quit_ is set.
@@ -110,9 +118,17 @@ private:
     // Render thread state: used only by the thread calling tick(), redetect(), shutdown()
     // and the accessors, never by the worker.
     Stage stage_ = Stage::idle;
-    // The staging texture frames are copied into, and its description (zeroed when none).
-    ID3D11Texture2D *staging_ = nullptr;
-    D3D11_TEXTURE2D_DESC staging_desc_ = {};
+    // The readback texture frames are copied into, and its size and format (zero when none).
+    reshade::api::resource readback_ = {};
+    uint32_t readback_w_ = 0, readback_h_ = 0;
+    reshade::api::format readback_format_ = reshade::api::format::unknown;
+    // Fence signalled after each copy with value fence_value_, or {0} on APIs where ReShade
+    // cannot create one; then a copy counts as finished after kFramesToWait ticks.
+    // fence_tried_ records that creating it was attempted.
+    reshade::api::fence fence_ = {};
+    uint64_t fence_value_ = 0;
+    bool fence_tried_ = false;
+    int frames_waited_ = 0;
     // generation_ goes up whenever results of detections already under way become stale
     // (frame size change, redetect(), shutdown()). copy_generation_ is its value when the
     // copy being analysed was made; that result is used only if the two still match.

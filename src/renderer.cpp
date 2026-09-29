@@ -100,7 +100,7 @@ bool Renderer::init(ID3D11Device *device, std::string &error)
     shutdown();
     device_ = device;
     const std::string preset = capture_preset_path(error);
-    if (preset.empty() || !capture_.create(device, preset, error))
+    if (preset.empty() || !capture_.create(ChainDevice{GraphicsApi::d3d11, reinterpret_cast<uint64_t>(device)}, preset, error))
     {
         error = "could not load the capture shader: " + error;
         shutdown();
@@ -286,7 +286,9 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
     // native_tex_ (native_w x native_h). Its one pass writes each native pixel from the
     // frame pixel at the centre of that pixel's block (capture.slang).
     if (!set_capture_grid(grid, error) ||
-        !capture_.frame(ctx, snap_srv_, native_rtv_, 0, 0, grid.native_w, grid.native_h, frame_count, error))
+        !capture_.frame(reinterpret_cast<uint64_t>(ctx), ChainImage{0, reinterpret_cast<uint64_t>(snap_srv_)},
+                        ChainImage{0, reinterpret_cast<uint64_t>(native_rtv_)}, 0, 0, grid.native_w, grid.native_h,
+                        frame_count, error))
         return false;
 
     // The final copy needs `dst` to have one sample per pixel, like out_tex_.
@@ -301,7 +303,9 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
     // size of the rectangle. Step 3: copy out_tex_ into `dst` at the rectangle's
     // position, leaving the rest of `dst` as it was.
     if (!ensure_output(grid.rect_w, grid.rect_h, dd.Format, error) ||
-        !chain.frame(ctx, native_srv_, out_rtv_, 0, 0, grid.rect_w, grid.rect_h, frame_count, error))
+        !chain.frame(reinterpret_cast<uint64_t>(ctx), ChainImage{0, reinterpret_cast<uint64_t>(native_srv_)},
+                     ChainImage{0, reinterpret_cast<uint64_t>(out_rtv_)}, 0, 0, grid.rect_w, grid.rect_h, frame_count,
+                     error))
         return false;
     const D3D11_BOX box = {0, 0, 0, UINT(grid.rect_w), UINT(grid.rect_h), 1};
     ctx->CopySubresourceRegion(dst, 0, UINT(grid.rect_x), UINT(grid.rect_y), 0, out_tex_, 0, &box);

@@ -3,7 +3,7 @@
 // librashader library) on the game's picture at its original low resolution. The preset is the
 // "companion" .slangp: "<name>.slangp" next to the selected ReShade preset "<name>.ini" (see
 // companion.h). This file handles ReShade's events, the settings and the add-on's overlay
-// window; the GPU work is done by Renderer (renderer.h).
+// window; the GPU work is done by FrameRenderer (frame_renderer.h), through ReShade's API.
 
 // ReShade's overlay header requires Dear ImGui's texture handle type to be 64 bits wide;
 // this must be defined before imgui.h is included.
@@ -15,7 +15,7 @@
 #include "detector.h"
 #include "discovery.h"
 #include "librashader_api.h"
-#include "renderer.h"
+#include "frame_renderer.h"
 #include "utf8.h"
 
 #include <atomic>
@@ -75,7 +75,7 @@ struct RuntimeData
     bool companion_exists = false;        // whether the companion file existed at the last check
     fs::file_time_type companion_mtime{}; // its last-modified time at the last check
 
-    Renderer renderer;           // copies the frame, extracts the low resolution picture, runs the chain
+    FrameRenderer renderer;      // copies the frame, extracts the low resolution picture, runs the chain
     bool renderer_ready = false; // renderer.init() succeeded
     ShaderChain chain;           // the companion preset compiled by librashader (chain.h)
     // Which companion file `chain` was last compiled from, and that file's modification time
@@ -400,8 +400,7 @@ void on_destroy_effect_runtime(effect_runtime *runtime)
     RuntimeData *rd = runtime_data(runtime);
     if (rd == nullptr)
         return;
-    command_list *cmd = runtime->get_command_queue()->get_immediate_command_list();
-    rd->detector.shutdown(reinterpret_cast<ID3D11DeviceContext *>(cmd->get_native()));
+    rd->detector.shutdown(runtime->get_device());
     rd->detect_pending = false;
 }
 
@@ -456,7 +455,15 @@ void on_destroy_device(device *dev)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     for (auto it = g_runtimes.begin(); it != g_runtimes.end();)
-        it = it->second->dev == dev ? g_runtimes.erase(it) : std::next(it);
+    {
+        if (it->second->dev != dev)
+        {
+            ++it;
+            continue;
+        }
+        it->second->detector.shutdown(dev);
+        it = g_runtimes.erase(it);
+    }
 }
 
 // ReShade event: a ReShade preset was loaded, because the user picked another one or effects
@@ -468,14 +475,20 @@ void on_set_current_preset_path(effect_runtime *runtime, const char *path)
         set_preset_path(*rd, path);
 }
 
-// Gets everything ready to render for rd on the D3D11 device `d3d`, doing only what is not
+// Gets everything ready to render for rd on device `dev`, doing only what is not
 // done yet: loads librashader.dll from the add-on's folder, sets up the renderer, and
 // compiles the companion .slangp into rd.chain when it is new, changed on disk, or a button
 // asked for it. Returns true when a compiled shader is ready; false when there is nothing
 // to render with, normally with rd.error saying why.
-bool prepare(RuntimeData &rd, ID3D11Device *d3d)
+bool prepare(RuntimeData &rd, device *dev)
 {
     std::string err;
+    ChainDevice chain_device;
+    if (!FrameRenderer::chain_device(dev, chain_device, err))
+    {
+        set_error(rd, err); // this graphics API is not supported (yet)
+        return false;
+    }
     if (!libra::loaded())
     {
         // After a failed load, try again at most every 2 seconds.
@@ -492,7 +505,7 @@ bool prepare(RuntimeData &rd, ID3D11Device *d3d)
     }
     if (!rd.renderer_ready)
     {
-        if (!rd.renderer.init(d3d, err))
+        if (!rd.renderer.init(dev, err))
         {
             set_error(rd, err);
             return false;
@@ -512,7 +525,7 @@ bool prepare(RuntimeData &rd, ID3D11Device *d3d)
         rd.chain_error.clear();
         const std::string name = utf8_from_path(rd.companion);
         const auto t0 = std::chrono::steady_clock::now();
-        if (rd.chain.create(d3d, name, err))
+        if (rd.chain.create(chain_device, name, err))
         {
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             log_info("Loaded " + name + " (" + std::to_string(int(ms)) + " ms)");
@@ -535,10 +548,11 @@ bool prepare(RuntimeData &rd, ID3D11Device *d3d)
 // ReShade event, once per frame, right before ReShade renders its own effects: this is where
 // the RetroArch shader runs. `rtv` is a view of the back buffer, the image the game has just
 // drawn and is about to show; the shader's result is written back into it, and ReShade's own
-// effects then run on top. `cmd_list` is the D3D11 device context to record the work on.
-// The frame is left untouched when the ReShade preset has no companion .slangp, the game is
-// not Direct3D 11, the output is HDR, the shader cannot be loaded, or (in automatic mode) no
-// pixel grid has been found yet. Sets rd's status or error to say what happened.
+// effects then run on top. `cmd_list` is the command list to record the work on.
+// The frame is left untouched when the ReShade preset has no companion .slangp, the game's
+// graphics API is not supported, the output is HDR, the shader cannot be loaded, or (in
+// automatic mode) no pixel grid has been found yet. Sets rd's status or error to say what
+// happened.
 void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_view rtv, resource_view)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -561,41 +575,25 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
     }
 
     device *dev = runtime->get_device();
-    if (dev->get_api() != device_api::d3d11)
-    {
-        set_error(*rd, "Only Direct3D 11 games are supported for now.");
-        return;
-    }
     if (hdr_output(runtime))
     {
         set_error(*rd, "HDR output is not supported yet. Turn HDR off in the game to use RetroArch shaders.");
         return;
     }
-    auto *d3d = reinterpret_cast<ID3D11Device *>(dev->get_native());
-    auto *ctx = reinterpret_cast<ID3D11DeviceContext *>(cmd_list->get_native());
-    if (!prepare(*rd, d3d))
+    if (!prepare(*rd, dev))
         return;
 
-    // Get the back buffer texture behind `rtv`, with its size and format.
-    auto *res = reinterpret_cast<ID3D11Resource *>(dev->get_resource_from_view(rtv).handle);
-    ID3D11Texture2D *target = nullptr;
-    if (res == nullptr || FAILED(res->QueryInterface(IID_PPV_ARGS(&target))))
+    // The back buffer texture behind `rtv`, with its size and format.
+    const resource target = dev->get_resource_from_view(rtv);
+    if (target.handle == 0)
         return;
-    D3D11_TEXTURE2D_DESC desc;
-    target->GetDesc(&desc);
-
-    // Releases the reference to `target` that QueryInterface added, on every path out of here.
-    struct Holder
-    {
-        ID3D11Texture2D *p;
-        ~Holder() { p->Release(); }
-    } hold{target};
+    const resource_desc desc = dev->get_resource_desc(target);
 
     // Take a snapshot: a copy of the frame as the game drew it, made before anything draws
     // over it. The renderer reads the low resolution picture from it, and the grid detector
     // analyses it.
     std::string err;
-    if (rd->renderer.snapshot(ctx, target, err) == nullptr)
+    if (!rd->renderer.snapshot(cmd_list, target, err))
     {
         set_error(*rd, err);
         return;
@@ -608,9 +606,9 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
     {
         // Automatic: use the grid the detector has found so far, and have it analyse this
         // snapshot later, in on_reshade_present. The detector reads the snapshot back from the
-        // GPU, which needs the immediate context (the one that executes commands directly).
-        // This event can instead come with a deferred context (which only records commands
-        // for later) when another add-on renders effects, where reading back is impossible.
+        // GPU on the immediate command list (the one ReShade executes at present). This event
+        // can instead come with another command list (on Direct3D 11, a deferred context that
+        // only records commands for later) when another add-on renders effects.
         rd->detect_pending = true;
         grid = rd->detector.grid();
         if (!grid.valid)
@@ -625,16 +623,16 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
         // Fixed and Whole frame: the grid covers the whole frame. Fixed divides it into the
         // configured number of original pixels; Whole frame uses one per frame pixel.
         grid.valid = true;
-        grid.rect_w = int(desc.Width);
-        grid.rect_h = int(desc.Height);
-        grid.native_w = g_settings.mode == native_manual ? std::max(1, g_settings.manual_w) : int(desc.Width);
-        grid.native_h = g_settings.mode == native_manual ? std::max(1, g_settings.manual_h) : int(desc.Height);
+        grid.rect_w = int(desc.texture.width);
+        grid.rect_h = int(desc.texture.height);
+        grid.native_w = g_settings.mode == native_manual ? std::max(1, g_settings.manual_w) : int(desc.texture.width);
+        grid.native_h = g_settings.mode == native_manual ? std::max(1, g_settings.manual_h) : int(desc.texture.height);
         grid.match = 1.0f;
     }
 
     // Extract the low resolution picture, run the preset on it and write the result over the
     // grid's rectangle of the back buffer. Pixels outside the rectangle are left as they are.
-    if (!rd->renderer.render(ctx, grid, rd->chain, target, rd->frame++, err))
+    if (!rd->renderer.render(cmd_list, grid, rd->chain, target, rd->frame++, err))
     {
         set_error(*rd, err);
         return;
@@ -647,7 +645,7 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
 
 // ReShade event, once per frame, after ReShade has drawn its effects and its overlay, just
 // before the frame is shown. Gives the grid detector the snapshot that on_begin_effects took
-// (the detector copies it and reads it back on the immediate context, see detector.h), and
+// (the detector copies it and reads it back on the immediate command list, see detector.h), and
 // sets the "Paused" status when on_begin_effects has stopped being called.
 void on_reshade_present(effect_runtime *runtime)
 {
@@ -657,13 +655,10 @@ void on_reshade_present(effect_runtime *runtime)
         return;
     const double t = now_seconds();
 
-    if (rd->detect_pending && rd->renderer.snapshot_texture() != nullptr)
+    if (rd->detect_pending && rd->renderer.snapshot_resource().handle != 0)
     {
         rd->detect_pending = false;
-        auto *d3d = reinterpret_cast<ID3D11Device *>(runtime->get_device()->get_native());
-        auto *imm = reinterpret_cast<ID3D11DeviceContext *>(
-            runtime->get_command_queue()->get_immediate_command_list()->get_native());
-        rd->detector.tick(d3d, imm, rd->renderer.snapshot_texture(), t);
+        rd->detector.tick(runtime->get_device(), runtime->get_command_queue(), rd->renderer.snapshot_resource(), t);
     }
 
     // ReShade only calls reshade_begin_effects when it has effects to render: effects are
@@ -1012,7 +1007,9 @@ extern "C" __declspec(dllexport) void AddonUninit(HMODULE addon_module, HMODULE)
     reshade::unregister_overlay("RetroArch Shaders", draw_overlay);
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_runtimes.clear(); // joins detector threads, frees chains
+        for (auto &[runtime, rd] : g_runtimes)
+            rd->detector.shutdown(rd->dev); // frees its GPU objects
+        g_runtimes.clear(); // joins detector threads, frees renderers and chains
         g_swapchains.clear();
     }
     stop_scan();

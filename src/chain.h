@@ -2,11 +2,10 @@
 // Loads and runs RetroArch shader presets through librashader, a library that runs
 // RetroArch's "slang" shaders outside RetroArch. A preset is a .slangp file: a list of
 // shader passes (each a .slang shader file) applied one after another, plus values for
-// the shaders' adjustable parameters. This file wraps librashader's compiled preset for
-// Direct3D 11 (a "filter chain") in a class, and reads and compares preset parameters,
-// which the add-on's window shows as sliders and saves.
+// the shaders' adjustable parameters. This file wraps librashader's compiled preset (a
+// "filter chain") for each graphics API in one class, and reads and compares preset
+// parameters, which the add-on's window shows as sliders and saves.
 
-#include <d3d11.h>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -44,10 +43,41 @@ bool read_preset_params(const std::string &preset_path, std::vector<ShaderParam>
 std::vector<std::pair<std::string, float>> param_overrides(const std::vector<ShaderParam> &current,
                                                            const std::vector<ShaderParam> &base);
 
-// A RetroArch preset compiled by librashader for one Direct3D 11 device, plus its
-// parameters. create() loads and compiles a preset, frame() draws it, set_param()
-// changes a parameter while it runs. Needs librashader loaded first (libra::load in
-// librashader_api.h). The destructor frees the compiled preset.
+// The graphics APIs a ShaderChain can be compiled for (librashader has a runtime for each).
+enum class GraphicsApi
+{
+    d3d9,
+    d3d11,
+    d3d12,
+    opengl,
+    vulkan,
+};
+
+// Native objects of the device a chain is compiled for.
+struct ChainDevice
+{
+    GraphicsApi api = GraphicsApi::d3d11;
+    // ID3D11Device*, ID3D12Device* or IDirect3DDevice9* (as an integer).
+    uint64_t device = 0;
+};
+
+// One image a chain reads (its input) or draws into (its output), as native handles of
+// the chain's API. Which fields are used depends on the API:
+//  - Direct3D 11: `view` only: an ID3D11ShaderResourceView* for the input, an
+//    ID3D11RenderTargetView* for the output.
+// (Other APIs are added with their support.)
+struct ChainImage
+{
+    uint64_t resource = 0;          // the texture or image itself
+    uint64_t view = 0;              // a view of it, for APIs that take views
+    uint32_t format = 0;            // its native format, for APIs that need it
+    uint32_t width = 0, height = 0; // its size in pixels
+};
+
+// A RetroArch preset compiled by librashader for one device, plus its parameters.
+// create() loads and compiles a preset, frame() draws it, set_param() changes a parameter
+// while it runs. Needs librashader loaded first (libra::load in librashader_api.h). The
+// destructor frees the compiled preset.
 class ShaderChain
 {
 public:
@@ -56,28 +86,31 @@ public:
     ShaderChain &operator=(const ShaderChain &) = delete;
     ~ShaderChain() { destroy(); }
 
+    // True for the APIs create() can compile for. The others fail with an explanation.
+    static bool supports(GraphicsApi api);
+
     // Loads the preset file at `preset_path` (a UTF-8 path) and compiles all its shader
     // passes for `device`. Any preset loaded before is freed first, even if this one then
-    // fails. Returns false and sets `error` if librashader is not loaded or the preset
-    // fails to load or compile; ready() is then false. Compiling runs on the calling
-    // thread and can take a while for large presets.
-    bool create(ID3D11Device *device, const std::string &preset_path, std::string &error);
+    // fails. Returns false and sets `error` if librashader is not loaded, the API is not
+    // supported, or the preset fails to load or compile; ready() is then false. Compiling
+    // runs on the calling thread and can take a while for large presets.
+    bool create(const ChainDevice &device, const std::string &preset_path, std::string &error);
     // Frees the compiled preset and forgets its parameters and path. Safe to call when
     // nothing is loaded.
     void destroy();
     // True when a preset is compiled and frame() can draw.
     bool ready() const { return chain_ != nullptr; }
 
-    // Draws one frame of the preset: reads `input` (the image to process; in this
-    // project, the game's native image) and draws the result into the area (x, y, w, h)
-    // of `output`. `frame_count` is the frame number passed to the shaders; animated
-    // effects (noise, flicker, interlacing) use it, so it should go up by one each frame.
-    // The work is recorded on `ctx`. Returns false and sets `error` if no preset is
+    // Draws one frame of the preset: reads `input` (the image to process; in this project,
+    // the game's native image) and draws the result into the area (x, y, w, h) of
+    // `output`. `frame_count` is the frame number passed to the shaders; animated effects
+    // (noise, flicker, interlacing) use it, so it should go up by one each frame. The work
+    // is recorded on `commands`, the API's native command recorder: an
+    // ID3D11DeviceContext* on Direct3D 11. Returns false and sets `error` if no preset is
     // loaded or librashader reports an error.
-    // Do not rely on the rest of `output` being kept: Renderer::render (renderer.h) gives
-    // it a texture exactly the size of the area for that reason.
-    bool frame(ID3D11DeviceContext *ctx, ID3D11ShaderResourceView *input, ID3D11RenderTargetView *output, int x,
-               int y, int w, int h, uint64_t frame_count, std::string &error);
+    // Do not rely on the rest of `output` being kept: librashader clears all of it.
+    bool frame(uint64_t commands, const ChainImage &input, const ChainImage &output, int x, int y, int w, int h,
+               uint64_t frame_count, std::string &error);
 
     // Sets parameter `name` of the loaded preset to `value`, from the next frame() on,
     // and updates it in params(). Returns false if no preset is loaded (leaving `error`
@@ -91,9 +124,11 @@ public:
     const std::string &preset() const { return preset_; }
 
 private:
-    // librashader's handle to the compiled preset, or null. Stored as void* so this
-    // header does not need librashader's headers.
-    void *chain_ = nullptr; // a libra_d3d11_filter_chain_t
+    GraphicsApi api_ = GraphicsApi::d3d11;
+    // librashader's handle to the compiled preset for api_ (a libra_d3d11_filter_chain_t
+    // and so on), or null. Stored as void* so this header does not need librashader's
+    // headers.
+    void *chain_ = nullptr;
     std::vector<ShaderParam> params_;
     std::string preset_;
 };

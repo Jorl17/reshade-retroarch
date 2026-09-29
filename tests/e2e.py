@@ -46,7 +46,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]
 # APIs the add-on renders on. On the others it must leave frames untouched and say why.
 SUPPORTED = {"d3d11"}
-UNSUPPORTED_REASON = "Only Direct3D 11 games are supported for now."
+# What ReShade.log must say on an API the add-on does not support.
+API_NAMES = {"d3d9": "Direct3D 9", "d3d10": "Direct3D 10", "d3d11": "Direct3D 11", "d3d12": "Direct3D 12",
+             "opengl": "OpenGL", "vulkan": "Vulkan"}
 # File name ReShade must have next to the game for each API (Vulkan uses a layer instead).
 RESHADE_NAME = {"d3d9": "d3d9.dll", "d3d10": "d3d10.dll", "d3d11": "d3d11.dll", "d3d12": "dxgi.dll",
                 "opengl": "opengl32.dll"}
@@ -210,7 +212,8 @@ def run_api(args, api, work, common, results):
         add(ok, "5 pillarbox side art untouched", "exact" if ok else "changed")
     check("6 resized to 1080p            ", w("shots", "6.png"), c("exp_full1080.png"), c("full1080.png"))
     if not supported:
-        add(log_has(UNSUPPORTED_REASON), "  reason in ReShade.log        ", UNSUPPORTED_REASON)
+        reason = f"{API_NAMES[api]} is not supported"
+        add(log_has(reason), "  reason in ReShade.log        ", reason)
 
     def close(label, shot, expected):
         """10-bit frames go through 10 bits and back: allow off-by-one rounding."""
@@ -233,7 +236,7 @@ def run_api(args, api, work, common, results):
         na("8 HDR10 output                ", f"the host cannot draw it: {err}")
     else:
         close("8 HDR10 output untouched      ", w("shots", "8.png"), c("full4k.png"))
-        reason = "HDR output is not supported" if supported else UNSUPPORTED_REASON
+        reason = "HDR output is not supported" if supported else "is not supported"
         add(log_has(reason), "8 reason in ReShade.log       ", reason)
 
     code, err = host(300, f"250:shot={w('shots', '10.png')}", "--format", "rgba8srgb", "--image", "0:" + c("full4k.png"))

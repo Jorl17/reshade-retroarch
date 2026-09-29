@@ -1,6 +1,6 @@
 // Implementation of GridDetector (declared in detector.h): copies frames back from the GPU
-// without making the game wait, runs detect_grid() (grid_detect.cpp) on them on a worker
-// thread, and decides which results replace the pixel grid in use.
+// through ReShade's API without making the game wait, runs detect_grid() (grid_detect.cpp)
+// on them on a worker thread, and decides which results replace the pixel grid in use.
 
 #include "detector.h"
 
@@ -12,7 +12,12 @@ namespace
 // known, and while there is none or it is provisional (rescaled after a resize).
 constexpr double kIntervalKnown = 1.0;
 constexpr double kIntervalSearching = 0.25;
+// Without a fence, a copy is assumed finished after this many frames. Graphics drivers
+// queue at most about 3 frames ahead, so by then the GPU has done it.
+constexpr int kFramesToWait = 3;
 }
+
+using namespace reshade::api;
 
 // Starts the worker thread, which sleeps until tick() gives it a frame.
 GridDetector::GridDetector()
@@ -21,7 +26,7 @@ GridDetector::GridDetector()
 }
 
 // Tells the worker thread to quit and waits for it (it finishes a detection it is running
-// first). Releases the staging texture if shutdown() did not.
+// first). GPU objects must have been released by shutdown() already.
 GridDetector::~GridDetector()
 {
     {
@@ -31,9 +36,6 @@ GridDetector::~GridDetector()
     cv_.notify_all();
     if (worker_.joinable())
         worker_.join();
-    // shutdown() should have released the staging texture on the render thread.
-    if (staging_ != nullptr)
-        staging_->Release();
 }
 
 // Body of the worker thread. Runs at below-normal priority so the game comes first. Sleeps
@@ -61,64 +63,67 @@ void GridDetector::worker_main()
     }
 }
 
-// Makes sure staging_ is a staging texture (GPU memory the CPU can map and read) with the
+// Makes sure readback_ is a readback texture (GPU memory the CPU can map and read) with the
 // width, height and format of `desc`, creating it, or recreating it at the new size or
-// format, if needed. Returns false, with staging_ null, if creation fails.
-bool GridDetector::ensure_staging(ID3D11Device *device, const D3D11_TEXTURE2D_DESC &desc)
+// format, if needed; the format is made fully typed and non-sRGB (the bytes are what
+// matter). Also tries once to create fence_. Returns false if readback_ cannot be created.
+bool GridDetector::ensure_readback(device *dev, const resource_desc &desc)
 {
-    if (staging_ != nullptr && staging_desc_.Width == desc.Width && staging_desc_.Height == desc.Height &&
-        staging_desc_.Format == desc.Format)
-        return true;
-    if (staging_ != nullptr)
+    if (!fence_tried_)
     {
-        staging_->Release();
-        staging_ = nullptr;
+        fence_tried_ = true;
+        if (!dev->create_fence(0, fence_flags::none, &fence_))
+            fence_ = {};
     }
-    D3D11_TEXTURE2D_DESC d = {};
-    d.Width = desc.Width;
-    d.Height = desc.Height;
-    d.MipLevels = 1;
-    d.ArraySize = 1;
-    d.Format = desc.Format;
-    d.SampleDesc.Count = 1;
-    d.Usage = D3D11_USAGE_STAGING;
-    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    if (FAILED(device->CreateTexture2D(&d, nullptr, &staging_)))
+    const format fmt = format_to_default_typed(desc.texture.format, 0);
+    if (readback_.handle != 0 && readback_w_ == desc.texture.width && readback_h_ == desc.texture.height &&
+        readback_format_ == fmt)
+        return true;
+    if (readback_.handle != 0)
+        dev->destroy_resource(readback_);
+    readback_ = {};
+    readback_w_ = readback_h_ = 0;
+    readback_format_ = format::unknown;
+    if (!dev->create_resource(resource_desc(desc.texture.width, desc.texture.height, 1, 1, fmt, 1, memory_heap::readback,
+                                            resource_usage::copy_dest),
+                              nullptr, resource_usage::copy_dest, &readback_))
     {
-        staging_ = nullptr;
+        readback_ = {};
         return false;
     }
-    staging_desc_ = d;
+    readback_w_ = desc.texture.width;
+    readback_h_ = desc.texture.height;
+    readback_format_ = fmt;
     return true;
 }
 
 // Advances the detection by one step (see detector.h). First handles a change of frame
 // size, then acts on stage_:
-//  - idle: once enough time has passed, queues a GPU copy of `frame` into staging_;
-//  - copied: tries to map staging_ (make its memory readable by the CPU) without waiting;
-//    once the GPU has finished the copy, gives the mapped pixels to the worker;
-//  - analysing: once the worker is done, unmaps staging_ and passes the result to consume().
-void GridDetector::tick(ID3D11Device *device, ID3D11DeviceContext *ctx, ID3D11Texture2D *frame, double now)
+//  - idle: once enough time has passed, queues a GPU copy of `frame` into readback_ and a
+//    fence signal after it;
+//  - copied: once the GPU has finished the copy (fence reached, or kFramesToWait ticks
+//    passed where there is no fence), maps readback_ and gives the pixels to the worker;
+//  - analysing: once the worker is done, unmaps readback_ and passes the result to consume().
+void GridDetector::tick(device *dev, command_queue *queue, resource frame, double now)
 {
-    D3D11_TEXTURE2D_DESC desc;
-    frame->GetDesc(&desc);
+    const resource_desc desc = dev->get_resource_desc(frame);
 
     // Frame size changed: rescale the grid's rectangle to the new size as a provisional
     // estimate (the native resolution stays), so the picture stays sensible, and detect
     // again immediately. Anything in flight is for the old size, so it becomes stale.
-    if (int(desc.Width) != frame_w_ || int(desc.Height) != frame_h_)
+    if (int(desc.texture.width) != frame_w_ || int(desc.texture.height) != frame_h_)
     {
         if (grid_.valid && frame_w_ > 0 && frame_h_ > 0)
         {
-            const double sx = double(desc.Width) / frame_w_, sy = double(desc.Height) / frame_h_;
+            const double sx = double(desc.texture.width) / frame_w_, sy = double(desc.texture.height) / frame_h_;
             grid_.rect_x = int(grid_.rect_x * sx + 0.5);
             grid_.rect_w = int(grid_.rect_w * sx + 0.5);
             grid_.rect_y = int(grid_.rect_y * sy + 0.5);
             grid_.rect_h = int(grid_.rect_h * sy + 0.5);
             provisional_ = true;
         }
-        frame_w_ = int(desc.Width);
-        frame_h_ = int(desc.Height);
+        frame_w_ = int(desc.texture.width);
+        frame_h_ = int(desc.texture.height);
         ++generation_;
         candidate_ = PixelGrid();
         candidate_hits_ = 0;
@@ -129,12 +134,22 @@ void GridDetector::tick(ID3D11Device *device, ID3D11DeviceContext *ctx, ID3D11Te
     {
     case Stage::idle:
     {
-        // Start a copy when the interval has passed and the staging texture is ready.
-        // CopyResource only queues the copy; the GPU does it later.
+        // Start a copy when the interval has passed and the readback texture is ready. The
+        // commands only get queued; the GPU does the copy later.
         const double interval = (grid_.valid && !provisional_) ? kIntervalKnown : kIntervalSearching;
-        if (now - last_request_ < interval || !ensure_staging(device, desc))
+        if (now - last_request_ < interval || !ensure_readback(dev, desc))
             break;
-        ctx->CopyResource(staging_, frame);
+        command_list *const cmd = queue->get_immediate_command_list();
+        cmd->barrier(frame, resource_usage::shader_resource, resource_usage::copy_source);
+        cmd->copy_texture_region(frame, 0, nullptr, readback_, 0, nullptr);
+        cmd->barrier(frame, resource_usage::copy_source, resource_usage::shader_resource);
+        if (fence_.handle != 0)
+        {
+            // Submit the copy, then the fence signal behind it.
+            queue->flush_immediate_command_list();
+            queue->signal(fence_, ++fence_value_);
+        }
+        frames_waited_ = 0;
         copy_generation_ = generation_;
         last_request_ = now;
         stage_ = Stage::copied;
@@ -142,25 +157,24 @@ void GridDetector::tick(ID3D11Device *device, ID3D11DeviceContext *ctx, ID3D11Te
     }
     case Stage::copied:
     {
-        // With DO_NOT_WAIT, Map returns DXGI_ERROR_WAS_STILL_DRAWING instead of blocking
-        // while the GPU has not finished the copy.
-        D3D11_MAPPED_SUBRESOURCE m;
-        const HRESULT hr = ctx->Map(staging_, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
-        if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
-            break; // GPU not done yet; try next frame
-        // Mapping failed: drop this copy; a new one starts after the interval.
-        if (FAILED(hr))
+        const bool done = fence_.handle != 0 ? dev->get_completed_fence_value(fence_) >= fence_value_
+                                             : ++frames_waited_ >= kFramesToWait;
+        if (!done)
+            break; // GPU not done yet; check again next frame
+        subresource_data data = {};
+        if (!dev->map_texture_region(readback_, 0, nullptr, map_access::read_only, &data))
         {
+            // Mapping failed: drop this copy; a new one starts after the interval.
             stage_ = Stage::idle;
             break;
         }
         // The worker reads the mapped memory directly; unmapped once it is done.
         FrameView f;
-        f.data = static_cast<const uint8_t *>(m.pData);
-        f.width = int(staging_desc_.Width);
-        f.height = int(staging_desc_.Height);
-        f.pitch = m.RowPitch;
-        f.bytes_per_pixel = 4; // the add-on's snapshot is always a 32-bit format (Renderer::supported_format, renderer.cpp)
+        f.data = static_cast<const uint8_t *>(data.data);
+        f.width = int(readback_w_);
+        f.height = int(readback_h_);
+        f.pitch = data.row_pitch;
+        f.bytes_per_pixel = 4; // the snapshot is always a 32-bit format (FrameRenderer::supported_format)
         {
             std::lock_guard<std::mutex> lock(mutex_);
             job_frame_ = f;
@@ -184,7 +198,7 @@ void GridDetector::tick(ID3D11Device *device, ID3D11DeviceContext *ctx, ID3D11Te
             log = job_log_;
             job_done_ = false;
         }
-        ctx->Unmap(staging_, 0);
+        dev->unmap_texture_region(readback_, 0);
         stage_ = Stage::idle;
         // Use the result only if nothing made it stale since the copy (resize, redetect()).
         if (copy_generation_ == generation_)
@@ -256,10 +270,11 @@ void GridDetector::redetect()
     last_request_ = -1e9;
 }
 
-// Releases the staging texture (see detector.h). If the worker is still reading the mapped
-// texture, first waits for it to finish, checking every millisecond, and unmaps it.
-void GridDetector::shutdown(ID3D11DeviceContext *ctx)
+// Releases the GPU objects (see detector.h). If the worker is still reading the mapped
+// texture, first waits for it to finish, checking every millisecond.
+void GridDetector::shutdown(device *dev)
 {
+    bool mapped = false;
     if (stage_ == Stage::analysing)
     {
         // The worker is reading the mapped memory: wait for it (at most one detection)
@@ -276,19 +291,33 @@ void GridDetector::shutdown(ID3D11DeviceContext *ctx)
             }
             Sleep(1);
         }
-        ctx->Unmap(staging_, 0);
+        mapped = true;
     }
     stage_ = Stage::idle;
-    if (staging_ != nullptr)
-    {
-        staging_->Release();
-        staging_ = nullptr;
-    }
-    staging_desc_ = {};
+    release(dev, mapped);
     // frame_w_/frame_h_ and the grid are kept: ReShade resets the runtime when the
     // swap chain is resized, and the next tick then rescales the grid to the new
     // size instead of starting from nothing. Anything started before now is stale.
     ++generation_;
+}
+
+// Unmaps (if `mapped`) and destroys readback_, and destroys fence_.
+void GridDetector::release(device *dev, bool mapped)
+{
+    if (readback_.handle != 0)
+    {
+        if (mapped)
+            dev->unmap_texture_region(readback_, 0);
+        dev->destroy_resource(readback_);
+    }
+    readback_ = {};
+    readback_w_ = readback_h_ = 0;
+    readback_format_ = format::unknown;
+    if (fence_.handle != 0)
+        dev->destroy_fence(fence_);
+    fence_ = {};
+    fence_value_ = 0;
+    fence_tried_ = false;
 }
 
 // Returns the one-line status shown to the user: the grid in use (noting when it is

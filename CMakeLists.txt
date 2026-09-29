@@ -24,7 +24,6 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 # Everything that is not ReShade specific; shared by the add-on and the tools.
 add_library(rra_core STATIC
     src/grid_detect.cpp
-    src/detector.cpp
     src/renderer.cpp
     src/chain.cpp
     src/librashader_api.cpp
@@ -36,8 +35,8 @@ target_include_directories(rra_core PUBLIC src ${GEN})
 target_include_directories(rra_core SYSTEM PUBLIC third_party/librashader)
 target_link_libraries(rra_core PUBLIC d3d11 advapi32)
 
-# The ReShade add-on.
-add_library(RetroArchShaders SHARED src/addon.cpp)
+# The ReShade add-on. Its renderer and grid detector work through ReShade's API.
+add_library(RetroArchShaders SHARED src/addon.cpp src/frame_renderer.cpp src/detector.cpp)
 set_target_properties(RetroArchShaders PROPERTIES PREFIX "" SUFFIX ".addon64")
 target_include_directories(RetroArchShaders SYSTEM PRIVATE third_party/reshade third_party/imgui)
 target_link_libraries(RetroArchShaders PRIVATE rra_core)
