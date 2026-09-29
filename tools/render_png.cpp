@@ -1,8 +1,8 @@
 // Command-line tool: applies a RetroArch shader preset (.slangp file) to a screenshot
 // and saves the result as a PNG, using the same code the ReShade add-on uses (grid
 // detection, capture of the native image, librashader), but with no game and no ReShade.
-// Renders with Direct3D 11 (the add-on's Renderer) or, with --api d3d12, with Direct3D 12
-// (render_d3d12.h).
+// Renders with Direct3D 11 (the add-on's Renderer) or, with --api, with Direct3D 12
+// (render_d3d12.h) or Direct3D 9 (render_d3d9.h).
 // The end-to-end test (tests/e2e.py) uses its output as the expected result, and
 // tests/compat_sweep.py uses it to try every preset in a shader folder.
 //
@@ -23,8 +23,8 @@
 //     --hashes 1          print a checksum of the back buffer after every frame, to see
 //                         whether frames of an unchanging input differ from each other
 //                         (Direct3D 11 only)
-//     --api d3d11|d3d12   graphics API to render with (default d3d11); --native and
-//                         --hashes are Direct3D 11 only
+//     --api d3d11|d3d12|d3d9   graphics API to render with (default d3d11); --native
+//                         and --hashes are Direct3D 11 only
 //     --dxc DIR           Direct3D 12: folder with dxcompiler.dll and dxil.dll (default:
 //                         this executable's folder)
 //
@@ -36,6 +36,7 @@
 #include "librashader_api.h"
 #include "png_io.h"
 #include "render_d3d12.h"
+#include "render_d3d9.h"
 #include "renderer.h"
 
 #include <chrono>
@@ -210,17 +211,21 @@ int wmain(int argc, wchar_t **argv)
         printf("grid: %s\n", grid.describe().c_str());
     }
 
-    // Direct3D 12: the whole render is in render_d3d12(); save its result and stop.
-    if (api == L"d3d12")
+    // Direct3D 12 and 9: the whole render is in render_d3d12() / render_d3d9(); save its
+    // result and stop.
+    if (api == L"d3d12" || api == L"d3d9")
     {
         const auto t0 = std::chrono::steady_clock::now();
-        if (!render_d3d12(rgba, w, h, grid, narrow(argv[1]), sets, frames, dxc_dir.empty() ? exe_dir : dxc_dir, err))
+        const bool ok = api == L"d3d12" ? render_d3d12(rgba, w, h, grid, narrow(argv[1]), sets, frames,
+                                                       dxc_dir.empty() ? exe_dir : dxc_dir, err)
+                                        : render_d3d9(rgba, w, h, grid, narrow(argv[1]), sets, frames, err);
+        if (!ok)
         {
             fprintf(stderr, "%s\n", err.c_str());
             return 1;
         }
-        printf("%d frames in %.0f ms (Direct3D 12)\n", frames,
-               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        printf("%d frames in %.0f ms (%ls)\n", frames,
+               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), api.c_str());
         if (!save_png(argv[3], rgba.data(), w, h, w * 4))
         {
             fprintf(stderr, "could not save output\n");

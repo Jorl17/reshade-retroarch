@@ -133,8 +133,9 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
   GPU. If it cannot match the GPU or the game's queue, it leaves the game untouched and
   says why. Games that draw their final picture on a different GPU queue from the one
   they show it with (a few recent games do) may not work correctly.
-- Direct3D 9 does not work yet: every preset tried so far fails inside librashader
-  (`D3DERR_INVALIDCALL`), so the picture is left untouched and the window shows the error.
+- Direct3D 9 is experimental: librashader supports it only for shaders that fit Direct3D
+  9's old shader model, and its Direct3D 9 runtime renders some presets quite differently
+  from the other APIs (crt-royale comes out much darker, for example).
 - Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
 - On Direct3D 12, librashader renders some presets slightly differently from the other
   APIs, so they can look a little different there (crt-royale's glow, for example).

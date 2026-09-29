@@ -29,7 +29,10 @@
 //
 // Where librashader records its work:
 //  - Direct3D 11, Direct3D 9 and OpenGL: straight on ReShade's command list (on Direct3D 11
-//    ReShade restores the game's state afterwards).
+//    ReShade restores the game's state afterwards). On Direct3D 9, librashader begins and
+//    ends a scene around each of its draws, which Direct3D 9 refuses inside another scene,
+//    and ReShade (6.8) renders effects inside a scene of its own: that scene is closed for
+//    librashader's work and opened again afterwards.
 //  - Direct3D 12 and Vulkan: on a private command list (a Vulkan command buffer), submitted
 //    to the same queue right after ReShade's pending commands. On Direct3D 12 because
 //    librashader binds its own descriptor heaps, and ReShade (6.8) assumes its own stay
@@ -120,14 +123,16 @@ private:
 
     // Returns, in `commands`, the native command recorder librashader should use this
     // frame (see the class comment): the native object of ReShade's list on Direct3D 11, 9
-    // and OpenGL; on Direct3D 12 and Vulkan it first submits ReShade's pending commands,
-    // then waits until the next private list of the ring is free and opens it. Returns
-    // false and sets `error` if `cmd` is not `queue`'s immediate list there, or the private
-    // list cannot be created or opened.
+    // and OpenGL (on Direct3D 9 it also ends the scene in progress, if any); on Direct3D 12
+    // and Vulkan it first submits ReShade's pending commands, then waits until the next
+    // private list of the ring is free and opens it. Returns false and sets `error` if
+    // `cmd` is not `queue`'s immediate list there, or the private list cannot be created or
+    // opened.
     bool begin_librashader(reshade::api::command_list *cmd, reshade::api::command_queue *queue, uint64_t &commands,
                            std::string &error);
-    // Closes and submits the private list opened by begin_librashader; nothing on the other
-    // APIs. Returns false and sets `error` if it cannot be submitted.
+    // Closes and submits the private list opened by begin_librashader, or on Direct3D 9
+    // begins again the scene begin_librashader ended; nothing on the other APIs. Returns
+    // false and sets `error` if the private list cannot be submitted.
     bool end_librashader(std::string &error);
     // Records on the private list opened by begin_librashader that `res` goes from `before`
     // to `after` (ReShade's barrier() records on ReShade's list, not on it). Nothing on the
@@ -143,6 +148,7 @@ private:
     struct VulkanCommands;
     std::unique_ptr<PrivateCommands> private_;
     bool private_open_ = false; // begin_librashader opened a private list not yet submitted
+    bool d3d9_scene_ended_ = false; // begin_librashader ended a Direct3D 9 scene to begin again
     // The queue the renderer renders on (from init()), to wait for the GPU before releasing
     // textures and chains.
     reshade::api::command_queue *queue_ = nullptr;

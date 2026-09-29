@@ -68,6 +68,16 @@ which is the usual case.
   complete. The proper fix needs ReShade: a way to submit with the present's
   synchronisation (see the ReShade requests in `BACKLOG.md`, not in the repository).
 
+### Direct3D 9: effects are rendered inside a scene
+ReShade 6.8 calls `BeginScene` before rendering effects and `EndScene` after
+(`Direct3DSwapChain9::on_present`), and librashader begins and ends a scene around each of
+its draws; Direct3D 9 refuses a scene inside another (`D3DERR_INVALIDCALL`), so every
+preset failed.
+- **Where:** `FrameRenderer::begin_librashader` / `end_librashader`.
+- **Guard: checked at run time.** The add-on ends the open scene before librashader's work
+  and begins one again afterwards only if `EndScene` succeeded, i.e. only if a scene was
+  open, so it works whether or not ReShade keeps doing this.
+
 ### Fences exist on every API except Vulkan without timeline semaphores
 ReShade 6.8 creates fences on Direct3D 9, 10, 11 (emulated with queries where needed), 12
 and OpenGL, and on Vulkan when the driver has timeline semaphores (ReShade turns them on).

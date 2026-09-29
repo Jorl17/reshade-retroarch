@@ -31,9 +31,9 @@ runtimes have with other presets.
 
 "The shader's output" means: within rounding (see ROUNDING_MEAN) of an offline render of
 the same frame through the same code (tools/render_png.exe) on APIs the add-on supports.
-The offline render uses Direct3D 12 for the Direct3D 12 run (librashader's Direct3D 12
-runtime renders some presets differently from its Direct3D 11 one) and Direct3D 11 for
-the others (render_png cannot render with them). On APIs the add-on does not support yet,
+The offline render uses the same API as the run for Direct3D 12 and Direct3D 9
+(librashader's runtimes for them render some presets differently from its Direct3D 11
+one) and Direct3D 11 for the others (render_png cannot render with them). On APIs the add-on does not support yet,
 every frame must be left untouched and ReShade.log must say why.
 
 The only effect file installed is the placeholder RetroArchShaders.fx, which also
@@ -123,7 +123,9 @@ def rmtree(path):
 
 
 def prepare_common(args, common):
-    """Test frames and their offline renders, shared by every API. Returns the frame names."""
+    """Test frames and their offline renders, shared by every API. Returns a dict from API to
+    the reason its own offline renders could not be made (render_png --api), for APIs whose
+    renders failed; a failed Direct3D 11 render ends the test."""
     os.makedirs(common)
     native = np.asarray(Image.open(args.native).convert("RGB"))
     nh, nw = native.shape[:2]
@@ -141,23 +143,39 @@ def prepare_common(args, common):
         f.write('#reference "{}"\n'.format(os.path.join(os.path.abspath(args.shaders), args.preset).replace("\\", "/")))
     with open(os.path.join(common, "N.slangp"), "w") as f:
         f.write('#reference "{}"\n'.format(os.path.join(REPO, "tests", "presets", "nearest.slangp").replace("\\", "/")))
+    # N9: the Shader Model 3 version of N, as the Direct3D 9 run uses (see install()).
+    with open(os.path.join(common, "N9.slangp"), "w") as f:
+        f.write('#reference "{}"\n'.format(
+            os.path.join(REPO, "tests", "presets", "nearest_sm3.slangp").replace("\\", "/")))
     for f in ["render_png.exe"]:
         shutil.copy(os.path.join(args.build, f), common)
     shutil.copy(args.librashader, os.path.join(common, "librashader.dll"))
-    # Offline renders: exp_/exact_ on Direct3D 11, and exp12_/exact12_ on Direct3D 12 for the
-    # Direct3D 12 run (needs the DirectX Shader Compiler).
-    renders = [("A.slangp", "exp_", []), ("N.slangp", "exact_", [])]
-    if "d3d12" in args.apis.split(",") and args.dxc:
-        renders += [("A.slangp", "exp12_", ["--api", "d3d12", "--dxc", args.dxc]),
-                    ("N.slangp", "exact12_", ["--api", "d3d12", "--dxc", args.dxc])]
-    for companion, prefix, extra in renders:
+    # Offline renders: exp_/exact_ on Direct3D 11; exp12_/exact12_ on Direct3D 12 for the
+    # Direct3D 12 run (needs the DirectX Shader Compiler); exp9_/exact9_ on Direct3D 9 for
+    # the Direct3D 9 run. (api, companion, prefix, extra render_png arguments).
+    apis = args.apis.split(",")
+    renders = [("d3d11", "A.slangp", "exp_", []), ("d3d11", "N.slangp", "exact_", [])]
+    if "d3d12" in apis and args.dxc:
+        renders += [("d3d12", "A.slangp", "exp12_", ["--api", "d3d12", "--dxc", args.dxc]),
+                    ("d3d12", "N.slangp", "exact12_", ["--api", "d3d12", "--dxc", args.dxc])]
+    if "d3d9" in apis:
+        renders += [("d3d9", "A.slangp", "exp9_", ["--api", "d3d9"]),
+                    ("d3d9", "N9.slangp", "exact9_", ["--api", "d3d9"])]
+    failed = {}
+    for api, companion, prefix, extra in renders:
         for name in frames:
+            if api in failed:
+                break
             r = subprocess.run([os.path.join(common, "render_png.exe"), os.path.join(common, companion),
                                 os.path.join(common, name + ".png"), os.path.join(common, prefix + name + ".png"),
                                 *extra], capture_output=True, text=True, cwd=common)
-            if r.returncode != 0:
-                sys.exit(f"offline render of {name} with {companion} {extra} failed:\n{r.stdout}{r.stderr}")
-    return list(frames)
+            if r.returncode == 0:
+                continue
+            message = f"offline render of {name} with {companion} {extra} failed: {(r.stdout + r.stderr).strip()}"
+            if api == "d3d11":
+                sys.exit(message)
+            failed[api] = message
+    return failed
 
 
 def install(args, api, work, common):
@@ -199,8 +217,13 @@ def install(args, api, work, common):
     return {"VK_ADD_LAYER_PATH": work, "VK_INSTANCE_LAYERS": "VK_LAYER_reshade"}
 
 
-def run_api(args, api, work, common, results):
-    """Runs the scenario on one API and appends (status, label, detail) to `results`."""
+def run_api(args, api, work, common, results, reference_error=None):
+    """Runs the scenario on one API and appends (status, label, detail) to `results`.
+    `reference_error`: why the API's own offline renders could not be made, if they could
+    not; the API is then reported as failed without running it."""
+    if reference_error:
+        results.append(("FAIL", f"{api:6} offline reference          ", reference_error[:300]))
+        return
     env_extra = install(args, api, work, common)
     supported = api in SUPPORTED
 
@@ -212,9 +235,10 @@ def run_api(args, api, work, common, results):
 
     def expected(name):
         """The offline render `name` (exp_... or exact_...) for this API: its Direct3D 12
-        version on Direct3D 12, the Direct3D 11 one elsewhere."""
-        if api == "d3d12":
-            name = name.replace("exp_", "exp12_", 1).replace("exact_", "exact12_", 1)
+        or Direct3D 9 version on those APIs, the Direct3D 11 one elsewhere."""
+        suffix = {"d3d12": "12", "d3d9": "9"}.get(api)
+        if suffix:
+            name = name.replace("exp_", f"exp{suffix}_", 1).replace("exact_", f"exact{suffix}_", 1)
         return c(name)
 
     def host(frames, script, *host_args):
@@ -372,11 +396,11 @@ def main():
         path = os.path.join(work, entry)
         rmtree(path) if os.path.isdir(path) else os.remove(path)
     common = os.path.join(work, "common")
-    prepare_common(args, common)
+    reference_errors = prepare_common(args, common)
 
     results = []
     for api in args.apis.split(","):
-        run_api(args, api, os.path.join(work, api), common, results)
+        run_api(args, api, os.path.join(work, api), common, results, reference_errors.get(api))
 
     for status, label, detail in results:
         print(f"{status}  {label} ({detail})")

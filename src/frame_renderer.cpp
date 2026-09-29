@@ -6,6 +6,7 @@
 #include "vulkan_support.h"
 
 #include <d3d12.h>
+#include <d3d9.h>
 
 #include <utility>
 
@@ -543,6 +544,12 @@ bool FrameRenderer::snapshot(command_list *cmd, resource frame, std::string &err
 bool FrameRenderer::begin_librashader(command_list *cmd, command_queue *queue, uint64_t &commands, std::string &error)
 {
     const GraphicsApi api = chain_device_.api;
+    if (api == GraphicsApi::d3d9)
+    {
+        // End the scene ReShade renders effects in, if one is open (EndScene succeeds only
+        // then), so librashader can begin its own (see the class comment).
+        d3d9_scene_ended_ = SUCCEEDED(reinterpret_cast<IDirect3DDevice9 *>(device_->get_native())->EndScene());
+    }
     if (api != GraphicsApi::d3d12 && api != GraphicsApi::vulkan)
     {
         commands = cmd->get_native();
@@ -593,6 +600,11 @@ bool FrameRenderer::begin_librashader(command_list *cmd, command_queue *queue, u
 
 bool FrameRenderer::end_librashader(std::string &error)
 {
+    if (d3d9_scene_ended_)
+    {
+        d3d9_scene_ended_ = false;
+        reinterpret_cast<IDirect3DDevice9 *>(device_->get_native())->BeginScene();
+    }
     if (!private_open_)
         return true;
     private_open_ = false;
