@@ -33,9 +33,10 @@
 namespace
 {
 // Window procedure of the host's window. Besides the defaults: closing the window ends
-// the program, clicking it never activates it (it must not take focus), and it may be
-// sized larger than the screen (OpenGL and Vulkan need a window as large as the back
-// buffer, see size_window in backend.h).
+// the program, clicking it never activates it (it must not take focus), it always stays
+// behind every other window (so it never covers what the user is doing, a game included),
+// and it may be sized larger than the screen (OpenGL and Vulkan need a window as large as
+// the back buffer, see size_window in backend.h).
 LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_CLOSE)
@@ -45,6 +46,15 @@ LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     if (msg == WM_MOUSEACTIVATE)
         return MA_NOACTIVATE;
+    if (msg == WM_WINDOWPOSCHANGING)
+    {
+        // Whatever moves the window in the stack of windows (Windows, a graphics API,
+        // ReShade, a click) moves it to the bottom instead.
+        WINDOWPOS *pos = reinterpret_cast<WINDOWPOS *>(lp);
+        if ((pos->flags & SWP_NOZORDER) == 0)
+            pos->hwndInsertAfter = HWND_BOTTOM;
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
     if (msg == WM_GETMINMAXINFO)
     {
         reinterpret_cast<MINMAXINFO *>(lp)->ptMaxTrackSize = {16384, 16384};
@@ -122,10 +132,12 @@ int wmain(int argc, wchar_t **argv)
     wc.lpszClassName = L"RRATestHost";
     wc.style = CS_OWNDC; // OpenGL needs a stable device context
     RegisterClassW(&wc);
-    // Small, in a corner, never activated: it must not steal focus from the user.
+    // Small, in a corner, never activated and behind every other window: it must not take
+    // focus from the user or cover anything. Created hidden, then shown directly at the
+    // bottom of the stack of windows (ShowWindow would first put it on top of the others).
     o.hwnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, wc.lpszClassName, L"reshade-retroarch test host",
                              WS_POPUP | WS_BORDER, 0, 0, 480, 270, nullptr, nullptr, wc.hInstance, nullptr);
-    ShowWindow(o.hwnd, SW_SHOWNOACTIVATE);
+    SetWindowPos(o.hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
     std::string err;
     bool unsupported = false;
