@@ -2,7 +2,7 @@
 // (tests/e2e.py). It runs next to the RetroArch Shaders add-on inside a game (in tests,
 // the stand-in game testhost/) and, at given frame numbers, saves screenshots, switches
 // ReShade presets and copies files. Tests need no keyboard input, so they never need the
-// game window to have focus. Direct3D 11 only.
+// game window to have focus. Works with every graphics API ReShade supports.
 //
 // What to do comes from the RRA_TEST_SCRIPT environment variable: a ';' separated list
 // of steps, each "<frame>:<action>=<argument>":
@@ -14,8 +14,6 @@
 // after the N-th frame is presented. Each step is reported in ReShade.log.
 
 #include <reshade.hpp>
-
-#include <d3d11.h>
 
 #include "png_io.h"
 
@@ -71,91 +69,87 @@ void parse(const std::string &script)
 
 // Copies the back buffer (the texture the frame is drawn into, reached through the
 // render target view `rtv`) to the CPU as 8-bit RGBA: fills `out` with rows packed one
-// after the other and sets `w` and `h`. Returns false if that is not possible (for
-// example a multisampled back buffer). Handles 8-bit RGBA and BGRA formats (sRGB or not)
-// and 10-bit RGB, keeping the top 8 bits of each 10-bit channel; sRGB values are taken
-// as stored, without conversion.
-// It does its own copy because ReShade's capture_screenshot returns 10-bit frames
-// still packed, and fails for sRGB ones.
-// The GPU texture cannot be read by the CPU directly, so it is first copied into a
-// "staging" texture: a CPU-readable copy with the same size and format.
+// after the other, top row first, and sets `w` and `h`. Returns false if that is not
+// possible (for example a multisampled back buffer). Handles 8-bit RGBA/BGRA/RGBX/BGRX
+// (sRGB or not, values taken as stored) and 10-bit RGB/BGR, keeping the top 8 bits of
+// each 10-bit channel.
+//
+// Works on every graphics API: it only uses ReShade's API, the same way ReShade's own
+// screenshot code does (copy into a CPU-readable "readback" texture, wait for the GPU,
+// read). It does not use ReShade's capture_screenshot, which returns 10-bit frames
+// still packed and fails for sRGB ones.
 bool read_frame(reshade::api::effect_runtime *runtime, reshade::api::resource_view rtv, std::vector<uint8_t> &out,
                 uint32_t &w, uint32_t &h)
 {
-    // ReShade's handles are the native Direct3D 11 objects.
-    auto *res = reinterpret_cast<ID3D11Resource *>(runtime->get_device()->get_resource_from_view(rtv).handle);
-    auto *dev = reinterpret_cast<ID3D11Device *>(runtime->get_device()->get_native());
-    auto *ctx = reinterpret_cast<ID3D11DeviceContext *>(
-        runtime->get_command_queue()->get_immediate_command_list()->get_native());
-    ID3D11Texture2D *tex = nullptr;
-    if (res == nullptr || FAILED(res->QueryInterface(IID_PPV_ARGS(&tex))))
+    using namespace reshade::api;
+    device *const dev = runtime->get_device();
+    const resource res = dev->get_resource_from_view(rtv);
+    const resource_desc desc = dev->get_resource_desc(res);
+    if (desc.type != resource_type::texture_2d || desc.texture.samples != 1)
         return false;
-    D3D11_TEXTURE2D_DESC d;
-    tex->GetDesc(&d);
-    const DXGI_FORMAT format = d.Format;
-    d.Usage = D3D11_USAGE_STAGING;
-    d.BindFlags = 0;
-    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    d.MiscFlags = 0;
-    ID3D11Texture2D *staging = nullptr;
-    bool ok = d.SampleDesc.Count == 1 && SUCCEEDED(dev->CreateTexture2D(&d, nullptr, &staging));
-    D3D11_MAPPED_SUBRESOURCE m = {};
+    // The same format without sRGB: the bytes are what matter.
+    const format fmt = format_to_default_typed(desc.texture.format, 0);
+
+    resource readback = {};
+    if (!dev->create_resource(resource_desc(desc.texture.width, desc.texture.height, 1, 1, fmt, 1, memory_heap::readback,
+                                            resource_usage::copy_dest),
+                              nullptr, resource_usage::copy_dest, &readback))
+        return false;
+
+    // During reshade_finish_effects the back buffer is being used as a render target.
+    command_queue *const queue = runtime->get_command_queue();
+    command_list *const cmd = queue->get_immediate_command_list();
+    cmd->barrier(res, resource_usage::render_target, resource_usage::copy_source);
+    cmd->copy_texture_region(res, 0, nullptr, readback, 0, nullptr);
+    cmd->barrier(res, resource_usage::copy_source, resource_usage::render_target);
+    queue->flush_immediate_command_list();
+    queue->wait_idle();
+
+    subresource_data data = {};
+    const bool ok = dev->map_texture_region(readback, 0, nullptr, map_access::read_only, &data);
     if (ok)
     {
-        ctx->CopyResource(staging, tex);
-        ok = SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m));
-    }
-    if (ok)
-    {
-        // Convert each 4-byte pixel to RGBA with an opaque alpha.
-        w = d.Width;
-        h = d.Height;
+        w = desc.texture.width;
+        h = desc.texture.height;
         out.resize(size_t(w) * h * 4);
         for (uint32_t y = 0; y < h; ++y)
         {
-            const uint8_t *src = static_cast<const uint8_t *>(m.pData) + size_t(y) * m.RowPitch;
+            const uint8_t *src = static_cast<const uint8_t *>(data.data) + size_t(y) * data.row_pitch;
             uint8_t *dst = out.data() + size_t(y) * w * 4;
             for (uint32_t x = 0; x < w; ++x, src += 4, dst += 4)
             {
-                switch (format)
+                uint32_t v;
+                memcpy(&v, src, 4);
+                switch (fmt)
                 {
-                case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-                case DXGI_FORMAT_R10G10B10A2_UNORM:
-                {
-                    // 32 bits: red in bits 0-9, green 10-19, blue 20-29, alpha 30-31.
-                    uint32_t v;
-                    memcpy(&v, src, 4);
+                case format::r10g10b10a2_unorm: // red in bits 0-9, green 10-19, blue 20-29
                     dst[0] = uint8_t((v & 0x3FF) >> 2);
                     dst[1] = uint8_t(((v >> 10) & 0x3FF) >> 2);
                     dst[2] = uint8_t(((v >> 20) & 0x3FF) >> 2);
-                    dst[3] = 255;
                     break;
-                }
-                case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-                case DXGI_FORMAT_B8G8R8A8_UNORM:
-                case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-                case DXGI_FORMAT_B8G8R8X8_TYPELESS:
-                case DXGI_FORMAT_B8G8R8X8_UNORM:
-                case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+                case format::b10g10r10a2_unorm: // blue in bits 0-9, green 10-19, red 20-29
+                    dst[0] = uint8_t(((v >> 20) & 0x3FF) >> 2);
+                    dst[1] = uint8_t(((v >> 10) & 0x3FF) >> 2);
+                    dst[2] = uint8_t((v & 0x3FF) >> 2);
+                    break;
+                case format::b8g8r8a8_unorm:
+                case format::b8g8r8x8_unorm:
                     dst[0] = src[2];
                     dst[1] = src[1];
                     dst[2] = src[0];
-                    dst[3] = 255;
                     break;
-                default: // R8G8B8A8 family (the stored bytes, sRGB or not)
+                default: // r8g8b8a8_unorm, r8g8b8x8_unorm
                     dst[0] = src[0];
                     dst[1] = src[1];
                     dst[2] = src[2];
-                    dst[3] = 255;
                     break;
                 }
+                dst[3] = 255;
             }
         }
-        ctx->Unmap(staging, 0);
+        dev->unmap_texture_region(readback, 0);
     }
-    if (staging != nullptr)
-        staging->Release();
-    tex->Release();
+    dev->destroy_resource(readback);
     return ok;
 }
 
