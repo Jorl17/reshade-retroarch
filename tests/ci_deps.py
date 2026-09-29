@@ -63,8 +63,10 @@ def download(url, folder, expected_sha256=None):
     path = os.path.join(folder, url.rsplit("/", 1)[1])
     if not os.path.exists(path):
         print(f"downloading {url}", flush=True)
+        # reshade.me refuses Python's default User-Agent, so the requests name this project.
+        request = urllib.request.Request(url, headers={"User-Agent": "reshade-retroarch-tests"})
         # Written to a ".part" file first, so a broken download never has the final name.
-        with urllib.request.urlopen(url) as r, open(path + ".part", "wb") as f:
+        with urllib.request.urlopen(request) as r, open(path + ".part", "wb") as f:
             shutil.copyfileobj(r, f)
         os.replace(path + ".part", path)
     if expected_sha256 and sha256(path) != expected_sha256:
