@@ -1,7 +1,8 @@
 # RetroArch Shaders for ReShade
 
 A ReShade add-on that runs **unmodified RetroArch shader presets** (`.slangp`) on
-Direct3D 11 games, through [librashader](https://github.com/SnowflakePowered/librashader).
+Direct3D 11 and Direct3D 12 games, through
+[librashader](https://github.com/SnowflakePowered/librashader).
 
 Re-releases of old games usually scale a low-resolution picture up to your screen. A CRT
 shader needs the original picture, or scanlines and masks come out at the wrong scale.
@@ -16,6 +17,13 @@ as HD side art, are left alone.
 3. Put shaders in `retroarch-shaders\`, for example the
    [libretro slang-shaders](https://github.com/libretro/slang-shaders). An installed
    RetroArch (default folder, `%APPDATA%\RetroArch` or Steam) is found automatically.
+4. **Direct3D 12 games only:** also add Microsoft's DirectX Shader Compiler, which is not
+   included. Download `dxc_<date>.zip` from
+   [Microsoft's DirectXShaderCompiler releases](https://github.com/microsoft/DirectXShaderCompiler/releases)
+   and copy `bin\x64\dxcompiler.dll` and `bin\x64\dxil.dll` next to
+   `RetroArchShaders.addon64`. Without them the add-on leaves Direct3D 12 games untouched
+   and says so. (Not sure which your game uses? The RetroArch Shaders window tells you
+   if it needs them.)
 
 ## Use
 
@@ -88,6 +96,14 @@ The resolution in use is wrong. Same fix as above.
   written for SDR, so the add-on leaves the picture untouched and says so. Turn the
   game's HDR option off.
 
+### My game uses Direct3D 12 and nothing happens
+
+The window (and `ReShade.log`) says `Direct3D 12 needs dxcompiler.dll and dxil.dll`.
+librashader needs Microsoft's DirectX Shader Compiler to run shaders on Direct3D 12, and
+it is not included with the add-on: Microsoft's licence for `dxil.dll` puts conditions on
+redistributing it, so you download it from Microsoft yourself. See step 4 of
+[Install](#install).
+
 ### How do I report a detection problem?
 
 In ReShade's Settings, turn on **Save before and after images**, take a screenshot while
@@ -104,10 +120,14 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 | `Waiting: looking for the game's pixels` | Needs a scene with detail. Use **Fixed** if it never finds one. |
 | Red error under the shader name | The preset failed to load. Check it in RetroArch. |
 | `HDR output is not supported yet` | Turn the game's HDR option off. |
+| `Direct3D 12 needs dxcompiler.dll and dxil.dll` | Add Microsoft's DirectX Shader Compiler: step 4 of [Install](#install). |
+| `... is not supported yet` | The game uses a graphics API the add-on does not support yet (see Limitations). |
 
 ## Limitations
 
-- Direct3D 11 only.
+- Direct3D 11 and 12. OpenGL, Vulkan and Direct3D 9 are not supported yet; Direct3D 10
+  cannot be (librashader has no Direct3D 10 support).
+- Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
 - No HDR content (see FAQ).
 - Automatic detection needs sharp pixels. For smoothly upscaled games, use **Fixed**.
 - Bezel shaders only cover the game area.
