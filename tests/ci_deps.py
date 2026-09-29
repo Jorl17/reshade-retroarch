@@ -9,8 +9,10 @@ What ends up in <folder>:
   slang-shaders/                libretro's shader collection at a fixed commit; only
                                 crt/zfast-crt.slangp and its shaders are checked out
   vulkan-runtime/vulkan-1.dll   the Vulkan loader (LunarG's Vulkan runtime)
-  lavapipe/                     Mesa's software Vulkan driver: vulkan_lvp.dll and
-                                lvp_icd.x86_64.json (point VK_DRIVER_FILES at the .json)
+  mesa/x64/                     Mesa's 64-bit drivers, among them the software ones:
+                                lavapipe for Vulkan (point VK_DRIVER_FILES at
+                                lvp_icd.x86_64.json) and llvmpipe for OpenGL
+                                (libgallium_wgl.dll; see .github/workflows/ci.yml)
   vulkan-sdk/Bin/               the Vulkan SDK's files, including the validation layer
                                 (copied only: the installer changes nothing on the system)
   downloads/                    the downloaded files
@@ -114,7 +116,7 @@ def vulkan_runtime(out, downloads):
     if os.path.exists(dll):
         return
     with zipfile.ZipFile(download(VULKAN_RUNTIME_URL, downloads, VULKAN_RUNTIME_SHA256)) as z:
-        names = [n for n in z.namelist() if n.lower().endswith("vulkan-1.dll") and "64" in n]
+        names = [n for n in z.namelist() if n.lower().endswith("/x64/vulkan-1.dll")]
         if len(names) != 1:
             sys.exit(f"expected one 64-bit vulkan-1.dll in the Vulkan runtime zip, found {names}")
         os.makedirs(os.path.dirname(dll), exist_ok=True)
@@ -122,14 +124,13 @@ def vulkan_runtime(out, downloads):
             f.write(z.read(names[0]))
 
 
-def lavapipe(out, downloads):
-    """Mesa's software Vulkan driver (64-bit) from the mesa-dist-win release."""
-    folder = os.path.join(out, "lavapipe")
-    if os.path.exists(os.path.join(folder, "lvp_icd.x86_64.json")):
+def mesa(out, downloads):
+    """The x64 folder of the mesa-dist-win release (Mesa's 64-bit drivers)."""
+    folder = os.path.join(out, "mesa")
+    if os.path.exists(os.path.join(folder, "x64", "lvp_icd.x86_64.json")):
         return
     archive = download(MESA_URL, downloads, MESA_SHA256)
-    subprocess.run(["7z", "e", archive, f"-o{folder}", "x64/vulkan_lvp.dll", "x64/lvp_icd.x86_64.json", "-y"],
-                   check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["7z", "x", archive, f"-o{folder}", "x64", "-y"], check=True, stdout=subprocess.DEVNULL)
 
 
 def vulkan_sdk(out, downloads):
@@ -151,7 +152,7 @@ def main():
     librashader(out, downloads)
     slang_shaders(out)
     vulkan_runtime(out, downloads)
-    lavapipe(out, downloads)
+    mesa(out, downloads)
     vulkan_sdk(out, downloads)
     print(f"test dependencies ready in {out}")
 

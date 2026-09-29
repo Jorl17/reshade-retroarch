@@ -45,9 +45,9 @@ jobs:
         shell: bash
         run: out/build/files_test.exe
 
-      # The add-on inside ReShade, on Vulkan with Mesa's software Vulkan driver and the
-      # Vulkan validation layer. Direct3D is only tested locally: ReShade does not run on
-      # Windows' software Direct3D devices, and this machine has no GPU (see README).
+      # The add-on inside ReShade, on Vulkan and OpenGL with Mesa's software drivers (with
+      # the Vulkan validation layer). Direct3D is only tested locally: ReShade does not run
+      # on Windows' software Direct3D devices, and this machine has no GPU (see README).
       - name: Cache end-to-end test dependencies
         uses: actions/cache@v4
         with:
@@ -58,12 +58,29 @@ jobs:
         shell: bash
         run: python tests/ci_deps.py out/ci-deps
 
-      - name: End-to-end test (Vulkan, software rendering)
+      # Windows' own OpenGL is version 1.1 without a GPU driver. Register Mesa's OpenGL
+      # driver as the system's OpenGL driver, as mesa-dist-win's system-wide deployment tool
+      # does (bin/systemwidedeploy.cmd, bin/modules/reggl.cmd). Only on this CI machine.
+      - name: Use Mesa's software OpenGL
+        shell: pwsh
+        run: |
+          $mesa = "out\ci-deps\mesa\x64"
+          Copy-Item "$mesa\libgallium_wgl.dll" "$env:windir\System32\mesadrv.dll"
+          if (Test-Path "$mesa\libglapi.dll") { Copy-Item "$mesa\libglapi.dll" "$env:windir\System32\" }
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL"
+          New-Item -Path $key -Force | Out-Null
+          Set-ItemProperty -Path $key -Name DLL -Value "mesadrv.dll"
+          Set-ItemProperty -Path $key -Name DriverVersion -Value 1 -Type DWord
+          Set-ItemProperty -Path $key -Name Flags -Value 1 -Type DWord
+          Set-ItemProperty -Path $key -Name Version -Value 2 -Type DWord
+
+      - name: End-to-end test (Vulkan and OpenGL, software rendering)
         shell: bash
         run: |
           export PATH="$PWD/out/ci-deps/vulkan-runtime:$PATH"
-          export VK_DRIVER_FILES="$(cygpath -w "$PWD/out/ci-deps/lavapipe/lvp_icd.x86_64.json")"
-          python tests/e2e.py --apis vulkan --reshade out/ci-deps/ReShade64.dll \
+          export VK_DRIVER_FILES="$(cygpath -w "$PWD/out/ci-deps/mesa/x64/lvp_icd.x86_64.json")"
+          export GALLIUM_DRIVER=llvmpipe
+          python tests/e2e.py --apis vulkan,opengl --reshade out/ci-deps/ReShade64.dll \
             --librashader out/ci-deps/librashader.dll --shaders out/ci-deps/slang-shaders \
             --preset crt/zfast-crt.slangp --native out/synthetic/native.png \
             --vulkan-validation out/ci-deps/vulkan-sdk/Bin
