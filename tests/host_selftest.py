@@ -28,7 +28,11 @@ SUPPORTED = {
     ("d3d11", "rgba8", False), ("d3d11", "rgba8srgb", False), ("d3d11", "rgb10a2", False), ("d3d11", "rgb10a2", True),
     ("d3d12", "rgba8", False), ("d3d12", "rgb10a2", False), ("d3d12", "rgb10a2", True),
     ("opengl", "rgba8", False),
+    ("vulkan", "rgba8", False),
 }
+# Depends on the display and driver (formats a Vulkan surface offers, HDR being on):
+# must either work byte for byte or report unsupported.
+OPTIONAL = {("vulkan", "rgba8srgb", False), ("vulkan", "rgb10a2", False), ("vulkan", "rgb10a2", True)}
 APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]
 FORMATS = [("rgba8", False), ("rgba8srgb", False), ("rgb10a2", False), ("rgb10a2", True)]
 WARP_APIS = {"d3d10", "d3d11", "d3d12"}
@@ -90,6 +94,7 @@ def main():
             cmd += ["--selfshot", f"{f}:{p(f'shot_{tag}_{f}.png')}"]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         expected_ok = (api, fmt, hdr) in SUPPORTED
+        optional = (api, fmt, hdr) in OPTIONAL
         if r.returncode == 3:
             ok = not expected_ok
             print(f"{'pass' if ok else 'FAIL'}  {label}  unsupported: {r.stderr.strip()}")
@@ -99,7 +104,7 @@ def main():
             print(f"FAIL  {label}  exit {r.returncode}: {(r.stderr or r.stdout).strip()[:200]}")
             failed += 1
             continue
-        if not expected_ok:
+        if not expected_ok and not optional:
             print(f"FAIL  {label}  ran, but this combination was expected to be unsupported")
             failed += 1
             continue

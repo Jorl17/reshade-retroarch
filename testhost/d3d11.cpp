@@ -1,3 +1,5 @@
+// Direct3D 11 backend of the test host (see backend.h): a DXGI swap chain on a D3D11
+// device; pictures are uploaded once as textures and copied into the back buffer.
 #include "backend.h"
 
 #include <d3d11.h>
@@ -7,6 +9,7 @@
 
 namespace
 {
+// Releases COM object `p` (if any) and sets the pointer to null.
 template <typename T>
 void release(T *&p)
 {
@@ -17,6 +20,7 @@ void release(T *&p)
     }
 }
 
+// The DXGI format used for back buffers and pictures of format `f`.
 DXGI_FORMAT dxgi_format(Format f)
 {
     return f == Format::rgb10a2     ? DXGI_FORMAT_R10G10B10A2_UNORM
@@ -24,6 +28,7 @@ DXGI_FORMAT dxgi_format(Format f)
                                     : DXGI_FORMAT_R8G8B8A8_UNORM;
 }
 
+// See Backend in backend.h for what each function does.
 class D3D11 : public Backend
 {
 public:
@@ -104,6 +109,7 @@ public:
         bool ok = true;
         if (img != nullptr)
         {
+            // Same size and format, so CopyResource copies the bytes unchanged.
             ID3D11Texture2D *tex = texture(*img);
             ok = tex != nullptr;
             if (ok)
@@ -136,6 +142,7 @@ public:
             error = "GetBuffer failed";
             return false;
         }
+        // Copy to a CPU-readable ("staging") texture and read that.
         D3D11_TEXTURE2D_DESC d;
         bb->GetDesc(&d);
         d.Usage = D3D11_USAGE_STAGING;
@@ -173,6 +180,8 @@ public:
     }
 
 private:
+    // Returns a texture holding `img` in the back buffer's format, created on first use
+    // and kept for the next frames (so draw is a plain GPU copy). Null on failure.
     ID3D11Texture2D *texture(const Image &img)
     {
         if (auto it = textures_.find(&img); it != textures_.end())

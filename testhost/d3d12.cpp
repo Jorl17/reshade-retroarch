@@ -1,3 +1,6 @@
+// Direct3D 12 backend of the test host (see backend.h): a flip-model swap chain on a D3D12
+// device; pictures are uploaded once into CPU-visible buffers and copied into the back
+// buffer with CopyTextureRegion.
 #include "backend.h"
 
 #include <d3d12.h>
@@ -7,6 +10,7 @@
 
 namespace
 {
+// Releases COM object `p` (if any) and sets the pointer to null.
 template <typename T>
 void release(T *&p)
 {
@@ -17,15 +21,18 @@ void release(T *&p)
     }
 }
 
-constexpr UINT kBuffers = 2;
+constexpr UINT kBuffers = 2; // back buffers in the swap chain
 
+// The DXGI format used for back buffers of format `f` (Direct3D 12 has no sRGB swap chains).
 DXGI_FORMAT dxgi_format(Format f)
 {
     return f == Format::rgb10a2 ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
 }
 
-// Direct3D 12 with a flip-model swap chain. Every operation waits for the GPU: this is a
-// test host, simplicity beats throughput.
+// Every operation records one command list, submits it and waits until the GPU has
+// finished (see wait()): slow, but simple, and speed does not matter in a test host.
+// Back buffers are kept in the PRESENT state between operations. See Backend in
+// backend.h for what each public function does.
 class D3D12 : public Backend
 {
 public:
@@ -212,6 +219,8 @@ public:
     }
 
 private:
+    // Layout of a `w` x `h` picture inside a buffer, as CopyTextureRegion needs it: rows
+    // padded to D3D12_TEXTURE_DATA_PITCH_ALIGNMENT (256) bytes.
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint(UINT w, UINT h) const
     {
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp = {};
@@ -223,6 +232,8 @@ private:
         return fp;
     }
 
+    // Creates a buffer of `size` bytes: UPLOAD heap (CPU writes, GPU reads) or READBACK
+    // heap (GPU writes, CPU reads). Null on failure.
     ID3D12Resource *buffer(D3D12_HEAP_TYPE type, UINT64 size)
     {
         D3D12_HEAP_PROPERTIES hp = {};
@@ -242,6 +253,8 @@ private:
                                                                                                                           : nullptr;
     }
 
+    // Returns an upload buffer holding `img` in the back buffer's format and row layout
+    // (see footprint), created on first use and kept for the next frames. Null on failure.
     ID3D12Resource *upload_buffer(const Image &img)
     {
         if (auto it = uploads_.find(&img); it != uploads_.end())
@@ -262,6 +275,7 @@ private:
         return uploads_[&img] = up;
     }
 
+    // Render target view of back buffer `i`, used to clear it to black.
     D3D12_CPU_DESCRIPTOR_HANDLE rtv(UINT i) const
     {
         D3D12_CPU_DESCRIPTOR_HANDLE h = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -269,6 +283,8 @@ private:
         return h;
     }
 
+    // Gets the swap chain's back buffers and creates a render target view for each.
+    // Called after creating or resizing the swap chain.
     bool get_buffers()
     {
         for (UINT i = 0; i < kBuffers; ++i)
@@ -280,18 +296,22 @@ private:
         return true;
     }
 
+    // Drops the references to the back buffers (ResizeBuffers requires that).
     void release_buffers()
     {
         for (ID3D12Resource *&b : buffers_)
             release(b);
     }
 
+    // Starts recording a new command list.
     void begin()
     {
         alloc_->Reset();
         list_->Reset(alloc_, nullptr);
     }
 
+    // Records a transition of `r` from state `before` to `after`. Direct3D 12 requires the
+    // program to declare how a resource is about to be used (copy source, render target...).
     void barrier(ID3D12Resource *r, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
     {
         D3D12_RESOURCE_BARRIER b = {};
@@ -303,6 +323,7 @@ private:
         list_->ResourceBarrier(1, &b);
     }
 
+    // Finishes the command list, runs it on the GPU and waits until it is done.
     bool submit(std::string &error)
     {
         if (FAILED(list_->Close()))
@@ -316,6 +337,7 @@ private:
         return true;
     }
 
+    // Blocks until the GPU has finished all work submitted so far (signals a fence and waits for it).
     void wait()
     {
         ++fence_value_;

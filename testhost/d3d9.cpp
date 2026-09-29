@@ -1,3 +1,5 @@
+// Direct3D 9 backend of the test host (see backend.h): a windowed D3D9 device; pictures
+// are uploaded once into video-memory surfaces and copied into the back buffer.
 #include "backend.h"
 
 #include <d3d9.h>
@@ -6,6 +8,7 @@
 
 namespace
 {
+// Releases COM object `p` (if any) and sets the pointer to null.
 template <typename T>
 void release(T *&p)
 {
@@ -16,8 +19,9 @@ void release(T *&p)
     }
 }
 
-// Direct3D 9, windowed. Back buffers are X8R8G8B8 (BGRA byte order); D3D9 has no
-// windowed 10-bit or sRGB back buffer formats.
+// Back buffers are D3DFMT_X8R8G8B8, which stores blue first in memory. Windowed
+// Direct3D 9 has no 10-bit or sRGB back buffer formats and no HDR, so only
+// Format::rgba8 is supported. See Backend in backend.h for what each function does.
 class D3D9 : public Backend
 {
 public:
@@ -100,6 +104,7 @@ public:
 
     bool read_back(Image &out, std::string &error) override
     {
+        // Copy the back buffer into a system-memory surface and read that.
         IDirect3DSurface9 *bb = nullptr, *sys = nullptr;
         D3DLOCKED_RECT lr = {};
         bool ok = SUCCEEDED(dev_->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) &&
@@ -130,7 +135,9 @@ public:
     }
 
 private:
-    // The picture in a default-pool surface (StretchRect's source must be in video memory).
+    // Returns a video-memory surface holding `img`, created on first use and kept for the
+    // next frames. Null on failure. Built by filling a system-memory surface and copying
+    // it up with UpdateSurface, because StretchRect (used by draw) only reads video memory.
     IDirect3DSurface9 *picture(const Image &img)
     {
         if (auto it = pictures_.find(&img); it != pictures_.end())
@@ -157,6 +164,8 @@ private:
         return pictures_[&img] = vid;
     }
 
+    // Releases the cached picture surfaces. Required before Reset, which fails while any
+    // video-memory (D3DPOOL_DEFAULT) resource exists.
     void drop_pictures()
     {
         for (auto &[img, s] : pictures_)

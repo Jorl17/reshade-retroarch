@@ -1,3 +1,6 @@
+// OpenGL backend of the test host (see backend.h): a legacy WGL context on the window.
+// Pictures are uploaded once as textures and copied into the window's back buffer with
+// glBlitFramebuffer.
 #include "backend.h"
 
 #include <GL/gl.h>
@@ -6,7 +9,9 @@
 
 namespace
 {
-// OpenGL 3.0 framebuffer objects, loaded at run time (gl.h only covers OpenGL 1.1).
+// OpenGL 3.0 framebuffer-object functions and constants. The gl.h that comes with Windows
+// only declares OpenGL 1.1, so these are declared here and loaded at run time with
+// wglGetProcAddress.
 constexpr GLenum kReadFramebuffer = 0x8CA8, kDrawFramebuffer = 0x8CA9, kColorAttachment0 = 0x8CE0,
                  kFramebufferComplete = 0x8CD5, kRGBA8 = 0x8058;
 using PFNGenFramebuffers = void(APIENTRY *)(GLsizei, GLuint *);
@@ -16,9 +21,9 @@ using PFNFramebufferTexture2D = void(APIENTRY *)(GLenum, GLenum, GLenum, GLuint,
 using PFNCheckFramebufferStatus = GLenum(APIENTRY *)(GLenum);
 using PFNBlitFramebuffer = void(APIENTRY *)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
 
-// OpenGL draws into the window itself: its back buffer is exactly the window's client
-// area. The window is therefore sized to the requested back buffer and kept at the
-// bottom of the window stack, where it covers nothing the user is looking at.
+// With OpenGL the back buffer is the window's client area, so the window is sized to the
+// requested back buffer (see size_window in backend.h). Only Format::rgba8 is supported.
+// See Backend in backend.h for what each public function does.
 class OpenGL : public Backend
 {
 public:
@@ -151,24 +156,26 @@ public:
     }
 
 private:
+    // A test picture on the GPU: the texture, and a framebuffer object with the texture
+    // attached so glBlitFramebuffer can read from it.
     struct Picture
     {
         GLuint tex = 0, fbo = 0;
     };
 
+    // Sizes the window's client area, and so the back buffer, to `w` x `h` and remembers
+    // that size. Returns false if the window could not get that size.
     bool size_window(UINT w, UINT h)
     {
-        RECT r = {0, 0, LONG(w), LONG(h)};
-        AdjustWindowRectEx(&r, DWORD(GetWindowLongW(o_.hwnd, GWL_STYLE)), FALSE, DWORD(GetWindowLongW(o_.hwnd, GWL_EXSTYLE)));
-        if (!SetWindowPos(o_.hwnd, HWND_BOTTOM, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOACTIVATE))
+        if (!::size_window(o_.hwnd, w, h))
             return false;
-        RECT c = {};
-        GetClientRect(o_.hwnd, &c);
-        w_ = UINT(c.right);
-        h_ = UINT(c.bottom);
-        return w_ == w && h_ == h;
+        w_ = w;
+        h_ = h;
+        return true;
     }
 
+    // Returns `img` uploaded as a texture with its framebuffer object, created on first use
+    // and kept for the next frames. Null on failure.
     const Picture *picture(const Image &img)
     {
         if (auto it = pictures_.find(&img); it != pictures_.end())
@@ -199,7 +206,7 @@ private:
     Options o_;
     HDC hdc_ = nullptr;
     HGLRC glrc_ = nullptr;
-    UINT w_ = 0, h_ = 0;
+    UINT w_ = 0, h_ = 0; // back buffer (client area) size
     std::map<const Image *, Picture> pictures_;
     PFNGenFramebuffers GenFramebuffers = nullptr;
     PFNDeleteFramebuffers DeleteFramebuffers = nullptr;

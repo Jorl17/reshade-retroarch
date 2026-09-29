@@ -61,6 +61,7 @@ target_link_libraries(render_png PRIVATE rra_core windowscodecs ole32)
 # Test host: a stand-in game that draws identical frames with every graphics API.
 add_executable(test_host testhost/main.cpp testhost/d3d9.cpp testhost/d3d10.cpp testhost/d3d11.cpp
                testhost/d3d12.cpp testhost/opengl.cpp testhost/vulkan.cpp)
+target_include_directories(test_host SYSTEM PRIVATE third_party/vulkan)
 target_link_libraries(test_host PRIVATE d3d9 d3d10 d3d11 d3d12 dxgi opengl32 gdi32 windowscodecs ole32 user32 delayimp)
 # Load only the API in use, like a real game (and so ReShade sees only that API).
 target_link_options(test_host PRIVATE /DELAYLOAD:d3d9.dll /DELAYLOAD:d3d10.dll /DELAYLOAD:d3d11.dll

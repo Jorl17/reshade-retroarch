@@ -7,3 +7,4 @@ build/
 *.obj
 __pycache__/
 *.pyc
+.claude/

@@ -1,3 +1,5 @@
+// Direct3D 10 backend of the test host (see backend.h): the same as the Direct3D 11 one
+// (d3d11.cpp) on a D3D10 device, which has no separate device context.
 #include "backend.h"
 
 #include <d3d10.h>
@@ -6,6 +8,7 @@
 
 namespace
 {
+// Releases COM object `p` (if any) and sets the pointer to null.
 template <typename T>
 void release(T *&p)
 {
@@ -16,6 +19,7 @@ void release(T *&p)
     }
 }
 
+// The DXGI format used for back buffers and pictures of format `f`.
 DXGI_FORMAT dxgi_format(Format f)
 {
     return f == Format::rgb10a2     ? DXGI_FORMAT_R10G10B10A2_UNORM
@@ -23,7 +27,8 @@ DXGI_FORMAT dxgi_format(Format f)
                                     : DXGI_FORMAT_R8G8B8A8_UNORM;
 }
 
-// Direct3D 10 with the classic (bitblt) swap chain, as D3D10 games use.
+// Uses the older "bitblt" swap chain model (DXGI_SWAP_EFFECT_DISCARD), as Direct3D 10
+// games do. See Backend in backend.h for what each function does.
 class D3D10 : public Backend
 {
 public:
@@ -121,6 +126,7 @@ public:
             error = "GetBuffer failed";
             return false;
         }
+        // Copy to a CPU-readable ("staging") texture and read that.
         D3D10_TEXTURE2D_DESC d;
         bb->GetDesc(&d);
         d.Usage = D3D10_USAGE_STAGING;
@@ -158,6 +164,8 @@ public:
     }
 
 private:
+    // Returns a texture holding `img` in the back buffer's format, created on first use
+    // and kept for the next frames (so draw is a plain GPU copy). Null on failure.
     ID3D10Texture2D *texture(const Image &img)
     {
         if (auto it = textures_.find(&img); it != textures_.end())

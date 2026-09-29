@@ -1,7 +1,11 @@
-// Stand-in for a game, to test ReShade add-ons on every graphics API without one.
+// Test host: a stand-in for a game, used to test ReShade and its add-ons on every
+// graphics API without a real game.
 //
-// Opens a small window WITHOUT taking focus and presents test pictures through the
-// chosen API, unchanged, so every API shows byte-identical frames:
+// It opens a window that never takes keyboard focus (so tests do not interrupt whoever
+// is using the computer), and for a given number of frames shows test pictures (PNG
+// files) through the chosen graphics API, pixel for pixel. Every API shows
+// byte-identical frames, so results can be compared between APIs. What is shown, and
+// when, is given on the command line:
 //
 //   test_host --api d3d9|d3d10|d3d11|d3d12|opengl|vulkan   (default d3d11)
 //             --frames N [--size WxH] [--format rgba8|rgba8srgb|rgb10a2] [--hdr10 1] [--warp 1]
@@ -15,7 +19,10 @@
 // --warp 1           software rendering (Direct3D only)
 //
 // Exit codes: 0 ok, 1 error, 3 the API cannot do what was asked (format, HDR10).
-// Put ReShade (and add-ons) next to this executable to test them.
+// To test ReShade, put ReShade (named as the API's DLL, e.g. d3d11.dll) and the
+// add-ons next to this executable. The graphics API DLLs are delay-loaded, so only the
+// one in use is loaded, as in a real game. The per-API drawing code is in the backend
+// files (see backend.h).
 
 #include "../tools/png_io.h"
 #include "backend.h"
@@ -25,6 +32,10 @@
 
 namespace
 {
+// Window procedure of the host's window. Besides the defaults: closing the window ends
+// the program, clicking it never activates it (it must not take focus), and it may be
+// sized larger than the screen (OpenGL and Vulkan need a window as large as the back
+// buffer, see size_window in backend.h).
 LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_CLOSE)
@@ -34,7 +45,7 @@ LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     if (msg == WM_MOUSEACTIVATE)
         return MA_NOACTIVATE;
-    if (msg == WM_GETMINMAXINFO) // allow windows larger than the screen (the OpenGL host needs them)
+    if (msg == WM_GETMINMAXINFO)
     {
         reinterpret_cast<MINMAXINFO *>(lp)->ptMaxTrackSize = {16384, 16384};
         return 0;
@@ -42,6 +53,7 @@ LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// Converts a UTF-16 string (Windows command line) to UTF-8 (for printing).
 std::string narrow(const std::wstring &w)
 {
     std::string s(size_t(WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr)), '\0');
@@ -58,8 +70,10 @@ int wmain(int argc, wchar_t **argv)
     Options o;
     o.width = 3840;
     o.height = 2160;
+    // Frame number -> what happens at that frame.
     std::map<int, std::wstring> image_at, shot_at;
     std::map<int, std::pair<UINT, UINT>> resize_at;
+    // Options come in pairs: --name value.
     for (int a = 1; a + 1 < argc; a += 2)
     {
         const std::wstring opt = argv[a], val = argv[a + 1];
@@ -121,6 +135,8 @@ int wmain(int argc, wchar_t **argv)
         return unsupported ? 3 : 1;
     }
 
+    // Pictures by file name, loaded on first use. Backends cache their GPU copy per
+    // Image address, so an Image must stay at the same address: std::map guarantees it.
     std::map<std::wstring, Image> images;
     auto load = [&](const std::wstring &path) -> const Image * {
         if (auto it = images.find(path); it != images.end())
@@ -134,7 +150,10 @@ int wmain(int argc, wchar_t **argv)
         return &(images[path] = std::move(img));
     };
 
-    UINT bw = o.width, bh = o.height;
+    // Frame loop. Each frame: apply a scheduled resize, switch to a scheduled picture,
+    // draw the current picture (black if it does not fit the back buffer), take a
+    // scheduled self shot, present.
+    UINT bw = o.width, bh = o.height; // current back buffer size
     const Image *current = nullptr;
     for (int i = 0; i < frames; ++i)
     {

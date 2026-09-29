@@ -177,10 +177,16 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE)
 {
     if (!reshade::register_addon(addon_module))
         return false;
-    char buf[8192] = "";
     size_t len = 0;
-    if (getenv_s(&len, buf, sizeof(buf), "RRA_TEST_SCRIPT") == 0 && len > 0)
-        parse(buf);
+    getenv_s(&len, nullptr, 0, "RRA_TEST_SCRIPT"); // size, including the terminator
+    if (len > 0)
+    {
+        std::string buf(len, '\0');
+        if (getenv_s(&len, buf.data(), buf.size(), "RRA_TEST_SCRIPT") == 0)
+            parse(buf.c_str());
+        reshade::log::message(reshade::log::level::info,
+                              ("test capture: " + std::to_string(g_steps.size()) + " scripted steps").c_str());
+    }
     reshade::register_event<reshade::addon_event::reshade_finish_effects>(on_finish_effects);
     reshade::register_event<reshade::addon_event::reshade_present>(on_present);
     return true;

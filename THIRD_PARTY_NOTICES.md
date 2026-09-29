@@ -30,6 +30,12 @@ Copyright 2014 Patrick Mours. The full text is in `licenses/ReShade-BSD-3-Clause
 `third_party/imgui/` (`imgui.h`, `imconfig.h`, used for the ReShade overlay): **MIT**,
 Copyright (c) 2014-2025 Omar Cornut. The full text is in `licenses/imgui-MIT.txt`.
 
+## Vulkan headers
+
+`third_party/vulkan/` (Khronos Vulkan-Headers, version in `third_party/vulkan/VERSION`,
+used only to build the test host): **Apache-2.0 OR MIT**, Copyright The Khronos Group
+Inc. The full text is in `third_party/vulkan/LICENSE.md`.
+
 ## Shaders
 
 No shaders are included. RetroArch shader presets keep their own licences. For example,
