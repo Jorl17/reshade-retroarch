@@ -120,6 +120,22 @@ The loader header shipped with 0.12.0 does not compile with Direct3D 9 enabled.
 - **Where:** `third_party/librashader/librashader_ld.h` (marked "reshade-retroarch patch").
 - **Guard: build.** Updating the header drops the patch; the build fails if still needed.
 
+## Graphics drivers
+
+### The same frame does not always give the same bits
+With crt-royale inside a game on Direct3D 11, an NVIDIA RTX 5070 Ti (driver 617.14) gives
+two slightly different results for identical frames: a few isolated pixels, one colour
+channel each, up to 11/255 apart, alternating in runs. It starts in crt-royale's pass 7
+(`scanlines-horizontal-apply-mask`) as a one-level difference and is amplified by the
+bloom passes. The same test on the machine's AMD GPU, and offline on the NVIDIA
+(`render_png --hashes 1`), gives identical frames, so the add-on and librashader send the
+same work every frame; the driver computes it two ways.
+- **Where:** `tests/e2e.py` (how real presets are compared).
+- **Guard: tested with a tolerance.** Real presets are compared within rounding of the
+  offline render on every API; the add-on's own work (exact runs E1-E3, untouched frames)
+  must still match byte for byte. The investigation's tools: `render_png --hashes 1`,
+  `test_host --adapter N`.
+
 ## Vulkan
 
 ### The game's GPU found again in a second instance

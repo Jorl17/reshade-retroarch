@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <dxgi1_4.h>
 
+#include <cstdio>
 #include <map>
 
 namespace
@@ -59,9 +60,31 @@ public:
         const bool bitblt = o.format == Format::rgba8srgb;
         sd.BufferCount = bitblt ? 1 : 2;
         sd.SwapEffect = bitblt ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        const HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, o.warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE,
-                                                         nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &swap_, &dev_,
-                                                         nullptr, &ctx_);
+        // A specific GPU when --adapter asks for one (the driver type must then be "unknown").
+        IDXGIAdapter1 *adapter = nullptr;
+        if (o.adapter >= 0)
+        {
+            IDXGIFactory1 *factory = nullptr;
+            if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+            {
+                factory->EnumAdapters1(UINT(o.adapter), &adapter);
+                factory->Release();
+            }
+            DXGI_ADAPTER_DESC1 desc = {};
+            if (adapter == nullptr || FAILED(adapter->GetDesc1(&desc)))
+            {
+                release(adapter);
+                error = "no GPU number " + std::to_string(o.adapter);
+                return false;
+            }
+            fwprintf(stderr, L"adapter %d: %s\n", o.adapter, desc.Description);
+        }
+        const D3D_DRIVER_TYPE type = adapter != nullptr ? D3D_DRIVER_TYPE_UNKNOWN
+                                     : o.warp           ? D3D_DRIVER_TYPE_WARP
+                                                        : D3D_DRIVER_TYPE_HARDWARE;
+        const HRESULT hr = D3D11CreateDeviceAndSwapChain(adapter, type, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd,
+                                                         &swap_, &dev_, nullptr, &ctx_);
+        release(adapter);
         if (FAILED(hr))
         {
             error = "D3D11CreateDeviceAndSwapChain failed " + std::to_string(hr);

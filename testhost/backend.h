@@ -44,6 +44,7 @@ struct Options
     Format format = Format::rgba8; // back buffer format
     bool hdr10 = false;            // tell the system the output is HDR10 (ST.2084), as games with HDR on do
     bool warp = false;             // Direct3D only: use Windows' software renderer instead of the GPU
+    int adapter = -1;              // Direct3D 11 only: the GPU to use (DXGI's numbering), -1 for the default
 };
 
 // One graphics API. All functions return false on failure and put a description in

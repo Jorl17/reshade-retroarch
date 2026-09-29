@@ -9,6 +9,7 @@
 //
 //   test_host --api d3d9|d3d10|d3d11|d3d12|opengl|vulkan   (default d3d11)
 //             --frames N [--size WxH] [--format rgba8|rgba8srgb|rgb10a2] [--hdr10 1] [--warp 1]
+//             [--adapter N]
 //             [--image F:path.png]... [--resize F:WxH]... [--selfshot F:path.png]...
 //
 // --image F:path     from frame F, draw this picture (it must match the back buffer
@@ -17,6 +18,8 @@
 // --selfshot F:path  at frame F, save the back buffer as drawn by the host itself,
 //                    before ReShade: proves the host shows the picture unchanged
 // --warp 1           software rendering (Direct3D only)
+// --adapter N        Direct3D 11: render on GPU number N (DXGI's numbering, 0 = the default)
+//                    instead of the default one; the chosen GPU's name is printed
 //
 // Exit codes: 0 ok, 1 error, 3 the API cannot do what was asked (format, HDR10).
 // To test ReShade, put ReShade (named as the API's DLL, e.g. d3d11.dll) and the
@@ -100,6 +103,8 @@ int wmain(int argc, wchar_t **argv)
             o.hdr10 = val == L"1";
         else if (opt == L"--warp")
             o.warp = val == L"1";
+        else if (opt == L"--adapter")
+            o.adapter = _wtoi(val.c_str());
         else if (opt == L"--image" && colon != std::wstring::npos)
             image_at[_wtoi(val.c_str())] = val.substr(colon + 1);
         else if (opt == L"--selfshot" && colon != std::wstring::npos)

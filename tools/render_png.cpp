@@ -18,6 +18,8 @@
 //                         frame uses the whole frame as it is, WxH treats the whole frame
 //                         as a W x H picture stretched to fill it
 //     --set name=value    change a preset parameter before rendering (repeatable)
+//     --hashes 1          print a checksum of the back buffer after every frame, to see
+//                         whether frames of an unchanging input differ from each other
 //
 // Exit code: 0 success, 1 failure (message on stderr), 2 bad command line.
 // librashader.dll must be next to the executable.
@@ -70,6 +72,37 @@ static bool read_back(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11Texture
     return ok;
 }
 
+// Returns a checksum (64-bit FNV-1a) of the pixels of GPU texture `tex` (8-bit RGBA), read
+// back like read_back() does, or 0 on failure. Equal pictures give equal checksums.
+static uint64_t checksum(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11Texture2D *tex)
+{
+    D3D11_TEXTURE2D_DESC d;
+    tex->GetDesc(&d);
+    d.Usage = D3D11_USAGE_STAGING;
+    d.BindFlags = 0;
+    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    d.MiscFlags = 0;
+    ID3D11Texture2D *staging = nullptr;
+    if (FAILED(dev->CreateTexture2D(&d, nullptr, &staging)))
+        return 0;
+    ctx->CopyResource(staging, tex);
+    D3D11_MAPPED_SUBRESOURCE m;
+    uint64_t hash = 0;
+    if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m)))
+    {
+        hash = 1469598103934665603ull;
+        for (UINT y = 0; y < d.Height; ++y)
+        {
+            const uint8_t *row = static_cast<const uint8_t *>(m.pData) + size_t(y) * m.RowPitch;
+            for (UINT i = 0; i < d.Width * 4; ++i)
+                hash = (hash ^ row[i]) * 1099511628211ull;
+        }
+        ctx->Unmap(staging, 0);
+    }
+    staging->Release();
+    return hash;
+}
+
 // Entry point (wide-character arguments, so paths with any characters work). See the top
 // of the file for the arguments. Loads the input picture into a stand-in back buffer,
 // finds the pixel grid, loads the preset, renders `--frames` frames the way the add-on
@@ -85,6 +118,7 @@ int wmain(int argc, wchar_t **argv)
     // Options after the three fixed arguments, each followed by its value. Unknown
     // options are ignored; an option with no value ends the list.
     int frames = 3;
+    bool hashes = false;
     const wchar_t *native_out = nullptr;
     std::wstring grid_mode = L"auto";
     std::vector<std::pair<std::string, float>> sets;
@@ -97,6 +131,8 @@ int wmain(int argc, wchar_t **argv)
             frames = _wtoi(argv[++a]);
         else if (opt == L"--native")
             native_out = argv[++a];
+        else if (opt == L"--hashes")
+            hashes = _wtoi(argv[++a]) != 0;
         else if (opt == L"--grid")
             grid_mode = argv[++a];
         else if (opt == L"--set")
@@ -229,6 +265,8 @@ int wmain(int argc, wchar_t **argv)
             fprintf(stderr, "frame %d: %s\n", i, err.c_str());
             return 1;
         }
+        if (hashes)
+            printf("frame %d: %016llx\n", i, static_cast<unsigned long long>(checksum(dev, ctx, backbuffer)));
     }
     ctx->Flush();
     printf("%d frames in %.1f ms\n", frames,
