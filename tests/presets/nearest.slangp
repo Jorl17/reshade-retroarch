@@ -1,0 +1,6 @@
+# Test preset for tests/e2e.py (see nearest.slang): an exact nearest-neighbour enlargement.
+shaders = 1
+shader0 = "nearest.slang"
+filter_linear0 = false
+scale_type0 = viewport
+scale0 = 1.0

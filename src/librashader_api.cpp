@@ -1,3 +1,6 @@
+// Implementation of librashader_api.h: loading librashader.dll (and, for Direct3D 12,
+// the DirectX shader compiler it needs) at run time.
+
 #include "librashader_api.h"
 
 #include <mutex>
@@ -64,4 +67,27 @@ std::string libra::take_error(libra_error_t err)
     }
     g_api.error_free(&err);
     return text;
+}
+
+bool libra::load_d3d12_compiler(const std::wstring &addon_dir, std::string &error)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    static bool loaded = false;
+    if (loaded)
+        return true;
+    // dxil.dll first: dxcompiler.dll loads it by name, which then finds this copy.
+    for (const wchar_t *name : {L"dxil.dll", L"dxcompiler.dll"})
+    {
+        const std::wstring next_to_addon = addon_dir + L"\\" + name;
+        if (GetModuleHandleW(name) == nullptr &&
+            LoadLibraryExW(next_to_addon.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) == nullptr &&
+            LoadLibraryW(name) == nullptr)
+        {
+            error = "Direct3D 12 needs dxcompiler.dll and dxil.dll (Microsoft's DirectX Shader Compiler) next to "
+                    "RetroArchShaders.addon64; they were not found.";
+            return false;
+        }
+    }
+    loaded = true;
+    return true;
 }

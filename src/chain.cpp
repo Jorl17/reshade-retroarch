@@ -89,7 +89,25 @@ std::vector<std::pair<std::string, float>> param_overrides(const std::vector<Sha
 
 bool ShaderChain::supports(GraphicsApi api)
 {
-    return api == GraphicsApi::d3d11;
+    return api == GraphicsApi::d3d11 || api == GraphicsApi::d3d12;
+}
+
+// Fills the per-frame values librashader passes to the shaders, the same for every API:
+// playing forwards (frame_direction 1; -1 would mean rewinding), one shader run per
+// displayed frame (subframe 1 of 1), a source frame rate of 60 per second (assumed; the
+// real rate is not known here), and HDR brightness at its documented default (only HDR
+// presets read it).
+template <typename Options>
+static Options frame_options()
+{
+    Options opt = {};
+    opt.version = LIBRASHADER_CURRENT_VERSION;
+    opt.frame_direction = 1;
+    opt.total_subframes = 1;
+    opt.current_subframe = 1;
+    opt.frames_per_second = 60.0f;
+    opt.brightness_nits = 200.0f;
+    return opt;
 }
 
 // Human-readable name of `api`, for messages.
@@ -158,6 +176,15 @@ bool ShaderChain::create(const ChainDevice &device, const std::string &preset_pa
         chain = c;
         break;
     }
+    case GraphicsApi::d3d12:
+    {
+        filter_chain_d3d12_opt_t opt = {};
+        opt.version = LIBRASHADER_CURRENT_VERSION;
+        libra_d3d12_filter_chain_t c = nullptr;
+        err = api.d3d12_filter_chain_create(&preset, reinterpret_cast<ID3D12Device *>(device.device), &opt, &c);
+        chain = c;
+        break;
+    }
     default:
         break;
     }
@@ -188,6 +215,12 @@ void ShaderChain::destroy()
             libra::api().d3d11_filter_chain_free(&chain);
             break;
         }
+        case GraphicsApi::d3d12:
+        {
+            libra_d3d12_filter_chain_t chain = static_cast<libra_d3d12_filter_chain_t>(chain_);
+            libra::api().d3d12_filter_chain_free(&chain);
+            break;
+        }
         default:
             break;
         }
@@ -215,23 +248,32 @@ bool ShaderChain::frame(uint64_t commands, const ChainImage &input, const ChainI
     {
     case GraphicsApi::d3d11:
     {
-        // Per-frame values librashader passes to the shaders: playing forwards
-        // (frame_direction 1; -1 would mean rewinding), one shader run per displayed frame
-        // (subframe 1 of 1), a source frame rate of 60 per second (assumed; the real rate
-        // is not known here), and HDR brightness left at its default.
-        frame_d3d11_opt_t opt = {};
-        opt.version = LIBRASHADER_CURRENT_VERSION;
-        opt.frame_direction = 1;
-        opt.total_subframes = 1;
-        opt.current_subframe = 1;
-        opt.frames_per_second = 60.0f;
-        opt.brightness_nits = 200.0f; // documented default; only HDR presets read it
+        const frame_d3d11_opt_t opt = frame_options<frame_d3d11_opt_t>();
         // No transform matrix is passed (nullptr), so librashader uses its default one.
         libra_d3d11_filter_chain_t chain = static_cast<libra_d3d11_filter_chain_t>(chain_);
         err = libra::api().d3d11_filter_chain_frame(
             &chain, reinterpret_cast<ID3D11DeviceContext *>(commands), size_t(frame_count),
             reinterpret_cast<ID3D11ShaderResourceView *>(input.view),
             reinterpret_cast<ID3D11RenderTargetView *>(output.view), &viewport, nullptr, &opt);
+        break;
+    }
+    case GraphicsApi::d3d12:
+    {
+        const frame_d3d12_opt_t opt = frame_options<frame_d3d12_opt_t>();
+        // Both images come with our own descriptors (views), so librashader does not have
+        // to create views of the resources itself (it could not for the typeless snapshot).
+        libra_image_d3d12_t in = {}, out = {};
+        in.image_type = LIBRA_D3D12_IMAGE_TYPE_SOURCE_IMAGE;
+        in.handle.source.descriptor.ptr = SIZE_T(input.view);
+        in.handle.source.resource = reinterpret_cast<ID3D12Resource *>(input.resource);
+        out.image_type = LIBRA_D3D12_IMAGE_TYPE_OUTPUT_IMAGE;
+        out.handle.output.descriptor.ptr = SIZE_T(output.view);
+        out.handle.output.format = DXGI_FORMAT(output.format);
+        out.handle.output.width = output.width;
+        out.handle.output.height = output.height;
+        libra_d3d12_filter_chain_t chain = static_cast<libra_d3d12_filter_chain_t>(chain_);
+        err = libra::api().d3d12_filter_chain_frame(&chain, reinterpret_cast<ID3D12GraphicsCommandList *>(commands),
+                                                    size_t(frame_count), in, out, &viewport, nullptr, &opt);
         break;
     }
     default:
@@ -260,6 +302,12 @@ bool ShaderChain::set_param(const std::string &name, float value, std::string &e
     {
         libra_d3d11_filter_chain_t chain = static_cast<libra_d3d11_filter_chain_t>(chain_);
         err = libra::api().d3d11_filter_chain_set_param(&chain, name.c_str(), value);
+        break;
+    }
+    case GraphicsApi::d3d12:
+    {
+        libra_d3d12_filter_chain_t chain = static_cast<libra_d3d12_filter_chain_t>(chain_);
+        err = libra::api().d3d12_filter_chain_set_param(&chain, name.c_str(), value);
         break;
     }
     default:

@@ -489,6 +489,13 @@ bool prepare(RuntimeData &rd, device *dev)
         set_error(rd, err); // this graphics API is not supported (yet)
         return false;
     }
+    // librashader's Direct3D 12 support terminates the game if DirectX's shader compiler
+    // is missing, so make sure it is loaded before using it.
+    if (chain_device.api == GraphicsApi::d3d12 && !libra::load_d3d12_compiler(g_addon_dir.wstring(), err))
+    {
+        set_error(rd, err);
+        return false;
+    }
     if (!libra::loaded())
     {
         // After a failed load, try again at most every 2 seconds.
@@ -632,7 +639,7 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
 
     // Extract the low resolution picture, run the preset on it and write the result over the
     // grid's rectangle of the back buffer. Pixels outside the rectangle are left as they are.
-    if (!rd->renderer.render(cmd_list, grid, rd->chain, target, rd->frame++, err))
+    if (!rd->renderer.render(cmd_list, runtime->get_command_queue(), grid, rd->chain, target, rd->frame++, err))
     {
         set_error(*rd, err);
         return;

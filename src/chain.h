@@ -65,6 +65,10 @@ struct ChainDevice
 // the chain's API. Which fields are used depends on the API:
 //  - Direct3D 11: `view` only: an ID3D11ShaderResourceView* for the input, an
 //    ID3D11RenderTargetView* for the output.
+//  - Direct3D 12: `resource` (an ID3D12Resource*), `view` (the CPU descriptor handle of a
+//    shader resource view for the input, of a render target view for the output), and,
+//    for the output, `format` (a DXGI_FORMAT), `width` and `height`. The input must be in
+//    a pixel-shader-resource state and the output in the render-target state.
 // (Other APIs are added with their support.)
 struct ChainImage
 {
@@ -106,8 +110,9 @@ public:
     // `output`. `frame_count` is the frame number passed to the shaders; animated effects
     // (noise, flicker, interlacing) use it, so it should go up by one each frame. The work
     // is recorded on `commands`, the API's native command recorder: an
-    // ID3D11DeviceContext* on Direct3D 11. Returns false and sets `error` if no preset is
-    // loaded or librashader reports an error.
+    // ID3D11DeviceContext* on Direct3D 11, an open ID3D12GraphicsCommandList* on
+    // Direct3D 12 (librashader binds its own descriptor heaps on it). Returns false and
+    // sets `error` if no preset is loaded or librashader reports an error.
     // Do not rely on the rest of `output` being kept: librashader clears all of it.
     bool frame(uint64_t commands, const ChainImage &input, const ChainImage &output, int x, int y, int w, int h,
                uint64_t frame_count, std::string &error);

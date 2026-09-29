@@ -4,9 +4,73 @@
 #include "frame_renderer.h"
 #include "capture.h"
 
+#include <d3d12.h>
+
 #include <utility>
 
 using namespace reshade::api;
+
+// The private Direct3D 12 command list librashader records into (see frame_renderer.h).
+// Three command allocators (the memory a command list records into) are used in turn; an
+// allocator is reused only once the GPU has finished the list recorded into it, which a
+// fence (a counter the GPU sets when it reaches a point in the queue) tells.
+struct FrameRenderer::PrivateCommands
+{
+    static constexpr int kAllocators = 3;
+    ID3D12CommandAllocator *allocators[kAllocators] = {};
+    UINT64 finished_at[kAllocators] = {}; // fence value after the last list recorded with each
+    ID3D12GraphicsCommandList *list = nullptr;
+    ID3D12Fence *fence = nullptr;
+    UINT64 fence_value = 0;
+    HANDLE event = nullptr;
+    int current = 0;
+
+    // Creates everything on `device`. Returns false if anything cannot be created.
+    bool create(ID3D12Device *device)
+    {
+        for (ID3D12CommandAllocator *&a : allocators)
+            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&a))))
+                return false;
+        event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        return event != nullptr &&
+               SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[0], nullptr,
+                                                   IID_PPV_ARGS(&list))) &&
+               SUCCEEDED(list->Close()) && SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+    }
+
+    // Blocks until the GPU has reached fence value `value`.
+    void wait_for(UINT64 value)
+    {
+        if (fence != nullptr && fence->GetCompletedValue() < value)
+        {
+            fence->SetEventOnCompletion(value, event);
+            WaitForSingleObject(event, INFINITE);
+        }
+    }
+
+    // Waits until the GPU has finished every list submitted, then releases everything.
+    ~PrivateCommands()
+    {
+        wait_for(fence_value);
+        if (list != nullptr)
+            list->Release();
+        for (ID3D12CommandAllocator *a : allocators)
+            if (a != nullptr)
+                a->Release();
+        if (fence != nullptr)
+            fence->Release();
+        if (event != nullptr)
+            CloseHandle(event);
+    }
+};
+
+// Defined here, where PrivateCommands is complete (it is only declared in the header).
+FrameRenderer::FrameRenderer() = default;
+
+FrameRenderer::~FrameRenderer()
+{
+    shutdown();
+}
 
 bool FrameRenderer::chain_device(device *dev, ChainDevice &out, std::string &error)
 {
@@ -72,6 +136,11 @@ bool FrameRenderer::init(device *dev, std::string &error)
 
 void FrameRenderer::shutdown()
 {
+    // The GPU may still be using the textures and compiled presets: wait for it first.
+    if (queue_ != nullptr)
+        queue_->wait_idle();
+    private_.reset();
+    queue_ = nullptr;
     capture_.destroy();
     capture_grid_ = PixelGrid();
     if (device_ != nullptr)
@@ -200,9 +269,85 @@ bool FrameRenderer::snapshot(command_list *cmd, resource frame, std::string &err
     return true;
 }
 
-bool FrameRenderer::render(command_list *cmd, const PixelGrid &grid, ShaderChain &chain, resource dst,
-                           uint64_t frame_count, std::string &error)
+bool FrameRenderer::begin_librashader(command_list *cmd, command_queue *queue, uint64_t &commands, std::string &error)
 {
+    if (chain_device_.api != GraphicsApi::d3d12)
+    {
+        commands = cmd->get_native();
+        return true;
+    }
+    // The private list is submitted right after the immediate command list's pending
+    // commands; work recorded on another list would end up out of order.
+    if (cmd != queue->get_immediate_command_list())
+    {
+        error = "effects are being rendered on another add-on's command list, which is not supported on Direct3D 12";
+        return false;
+    }
+    if (private_ == nullptr)
+    {
+        private_ = std::make_unique<PrivateCommands>();
+        if (!private_->create(reinterpret_cast<ID3D12Device *>(device_->get_native())))
+        {
+            private_.reset();
+            error = "could not create a Direct3D 12 command list";
+            return false;
+        }
+    }
+    // ReShade's commands so far (the snapshot, the barriers) run first.
+    queue->flush_immediate_command_list();
+    PrivateCommands &p = *private_;
+    p.wait_for(p.finished_at[p.current]);
+    p.allocators[p.current]->Reset();
+    p.list->Reset(p.allocators[p.current], nullptr);
+    commands = reinterpret_cast<uint64_t>(p.list);
+    return true;
+}
+
+void FrameRenderer::end_librashader(command_queue *queue)
+{
+    if (chain_device_.api != GraphicsApi::d3d12 || private_ == nullptr)
+        return;
+    PrivateCommands &p = *private_;
+    p.list->Close();
+    ID3D12CommandQueue *q = reinterpret_cast<ID3D12CommandQueue *>(queue->get_native());
+    ID3D12CommandList *lists[] = {p.list};
+    q->ExecuteCommandLists(1, lists);
+    q->Signal(p.fence, ++p.fence_value);
+    p.finished_at[p.current] = p.fence_value;
+    p.current = (p.current + 1) % PrivateCommands::kAllocators;
+}
+
+// ReShade's resource states as Direct3D 12 states (only those the renderer uses).
+static D3D12_RESOURCE_STATES d3d12_state(resource_usage usage)
+{
+    switch (usage)
+    {
+    case resource_usage::render_target:
+        return D3D12_RESOURCE_STATE_RENDER_TARGET;
+    case resource_usage::copy_source:
+        return D3D12_RESOURCE_STATE_COPY_SOURCE;
+    default: // shader_resource, as ReShade maps it
+        return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    }
+}
+
+void FrameRenderer::transition(uint64_t commands, resource res, resource_usage before, resource_usage after)
+{
+    if (chain_device_.api != GraphicsApi::d3d12)
+        return;
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = reinterpret_cast<ID3D12Resource *>(res.handle);
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = d3d12_state(before);
+    b.Transition.StateAfter = d3d12_state(after);
+    reinterpret_cast<ID3D12GraphicsCommandList *>(commands)->ResourceBarrier(1, &b);
+}
+
+bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelGrid &grid, ShaderChain &chain,
+                           resource dst, uint64_t frame_count, std::string &error)
+{
+    queue_ = queue;
     // Refuse to run without a snapshot or a valid grid, or with a grid whose rectangle
     // reaches outside the snapshot.
     if (snap_.handle == 0 || !grid.valid)
@@ -221,29 +366,38 @@ bool FrameRenderer::render(command_list *cmd, const PixelGrid &grid, ShaderChain
     const format dst_format = device_->get_resource_desc(dst).texture.format;
     if (!ensure_native(nw, nh, error) || !ensure_output(rw, rh, dst_format, error) || !set_capture_grid(grid, error))
         return false;
-    const uint64_t native_cmd = cmd->get_native();
+
+    // Steps 1 and 2 run librashader, recorded where it may change any state (see the class
+    // comment). Both textures are switched to render targets here, on ReShade's list; the
+    // switches between and after the two steps are recorded next to them.
+    cmd->barrier(native_, resource_usage::shader_resource, resource_usage::render_target);
+    cmd->barrier(out_, resource_usage::copy_source, resource_usage::render_target);
+    uint64_t commands = 0;
+    if (!begin_librashader(cmd, queue, commands, error))
+    {
+        cmd->barrier(native_, resource_usage::render_target, resource_usage::shader_resource);
+        cmd->barrier(out_, resource_usage::render_target, resource_usage::copy_source);
+        return false;
+    }
 
     // Step 1: rebuild the native picture: run the capture preset on the snapshot, into
     // native_ (native_w x native_h). Its one pass writes each native pixel from the frame
     // pixel at the centre of that pixel's block (capture.slang).
-    cmd->barrier(native_, resource_usage::shader_resource, resource_usage::render_target);
-    const bool captured =
-        capture_.frame(native_cmd, chain_image(snap_, snap_srv_, format_to_default_typed(snap_format_, 0), snap_w_, snap_h_),
-                       chain_image(native_, native_rtv_, format::r8g8b8a8_unorm, nw, nh), 0, 0, int(nw), int(nh),
-                       frame_count, error);
-    cmd->barrier(native_, resource_usage::render_target, resource_usage::shader_resource);
-    if (!captured)
-        return false;
+    bool ok = capture_.frame(commands,
+                             chain_image(snap_, snap_srv_, format_to_default_typed(snap_format_, 0), snap_w_, snap_h_),
+                             chain_image(native_, native_rtv_, format::r8g8b8a8_unorm, nw, nh), 0, 0, int(nw), int(nh),
+                             frame_count, error);
+    transition(commands, native_, resource_usage::render_target, resource_usage::shader_resource);
 
     // Step 2: run the user's preset on the native picture, into out_, which is exactly the
     // size of the rectangle (librashader clears its whole output, so drawing straight into
     // the frame would erase what surrounds the game picture).
-    cmd->barrier(out_, resource_usage::copy_source, resource_usage::render_target);
-    const bool drawn = chain.frame(native_cmd, chain_image(native_, native_srv_, format::r8g8b8a8_unorm, nw, nh),
-                                   chain_image(out_, out_rtv_, format_to_default_typed(dst_format, 0), rw, rh), 0, 0,
-                                   int(rw), int(rh), frame_count, error);
-    cmd->barrier(out_, resource_usage::render_target, resource_usage::copy_source);
-    if (!drawn)
+    ok = ok && chain.frame(commands, chain_image(native_, native_srv_, format::r8g8b8a8_unorm, nw, nh),
+                           chain_image(out_, out_rtv_, format_to_default_typed(dst_format, 0), rw, rh), 0, 0, int(rw),
+                           int(rh), frame_count, error);
+    transition(commands, out_, resource_usage::render_target, resource_usage::copy_source);
+    end_librashader(queue);
+    if (!ok)
         return false;
 
     // Step 3: copy out_ into the frame at the rectangle's position; the rest of the frame

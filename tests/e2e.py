@@ -20,6 +20,12 @@ Scenario, the same on every API:
   6. back buffer resized to 1080p                       -> the shader's output
 Separate runs: 7. 10-bit back buffer, 8. HDR10 output, 10. sRGB back buffer, and
 9. librashader.dll missing. A format the host cannot draw on an API is reported as n/a.
+On Direct3D 12 also 11: DirectX's shader compiler missing (untouched, no crash).
+
+Exact runs (E1-E3), on supported APIs: the same frames with tests/presets/nearest.slangp,
+a shader whose output is the same bytes on every API. They must equal the offline render
+exactly, which proves the add-on's own work (frame copy, native picture, write-back) is
+exact on that API, whatever differences librashader's runtimes have with other presets.
 
 "The shader's output" means: equal to an offline render of the same frame through the
 same code (tools/render_png.exe, Direct3D 11) on APIs the add-on supports. On APIs it
@@ -45,7 +51,7 @@ import make_synthetic as ms  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]
 # APIs the add-on renders on. On the others it must leave frames untouched and say why.
-SUPPORTED = {"d3d11"}
+SUPPORTED = {"d3d11", "d3d12"}
 # What ReShade.log must say on an API the add-on does not support.
 API_NAMES = {"d3d9": "Direct3D 9", "d3d10": "Direct3D 10", "d3d11": "Direct3D 11", "d3d12": "Direct3D 12",
              "opengl": "OpenGL", "vulkan": "Vulkan"}
@@ -75,6 +81,15 @@ def compare(a, b, exact):
     return n <= MAX_DIFF_PIXELS_FRACTION * diff.size and worst <= MAX_DIFF_VALUE, f"{n} px differ, max {worst}"
 
 
+def newest_dxc():
+    """Folder of the newest Windows SDK's x64 DirectX Shader Compiler, or None."""
+    root = os.path.join(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"), "Windows Kits", "10", "bin")
+    if not os.path.isdir(root):
+        return None
+    found = sorted(d for d in os.listdir(root) if os.path.isfile(os.path.join(root, d, "x64", "dxcompiler.dll")))
+    return os.path.join(root, found[-1], "x64") if found else None
+
+
 def rmtree(path):
     def make_writable_and_retry(func, p, _):
         os.chmod(p, stat.S_IWRITE)
@@ -97,18 +112,22 @@ def prepare_common(args, common):
     }
     for name, img in frames.items():
         Image.fromarray(img).save(os.path.join(common, name + ".png"))
-    # The companion references the preset by absolute path: no copy of the shader folder needed.
+    # The companions reference their presets by absolute path: no copy of the shader folder
+    # needed. A: the preset under test. N: the exact nearest-neighbour test preset.
     with open(os.path.join(common, "A.slangp"), "w") as f:
         f.write('#reference "{}"\n'.format(os.path.join(os.path.abspath(args.shaders), args.preset).replace("\\", "/")))
+    with open(os.path.join(common, "N.slangp"), "w") as f:
+        f.write('#reference "{}"\n'.format(os.path.join(REPO, "tests", "presets", "nearest.slangp").replace("\\", "/")))
     for f in ["render_png.exe"]:
         shutil.copy(os.path.join(args.build, f), common)
     shutil.copy(args.librashader, os.path.join(common, "librashader.dll"))
-    for name in frames:
-        r = subprocess.run([os.path.join(common, "render_png.exe"), os.path.join(common, "A.slangp"),
-                            os.path.join(common, name + ".png"), os.path.join(common, "exp_" + name + ".png")],
-                           capture_output=True, text=True, cwd=common)
-        if r.returncode != 0:
-            sys.exit(f"offline render of {name} failed:\n{r.stdout}{r.stderr}")
+    for companion, prefix in [("A.slangp", "exp_"), ("N.slangp", "exact_")]:
+        for name in frames:
+            r = subprocess.run([os.path.join(common, "render_png.exe"), os.path.join(common, companion),
+                                os.path.join(common, name + ".png"), os.path.join(common, prefix + name + ".png")],
+                               capture_output=True, text=True, cwd=common)
+            if r.returncode != 0:
+                sys.exit(f"offline render of {name} with {companion} failed:\n{r.stdout}{r.stderr}")
     return list(frames)
 
 
@@ -122,13 +141,17 @@ def install(args, api, work, common):
     shutil.copy(args.librashader, os.path.join(work, "librashader.dll"))
     shutil.copy(os.path.join(REPO, "package", "reshade-shaders", "Shaders", "RetroArchShaders.fx"),
                 os.path.join(work, "reshade-shaders", "Shaders"))
-    for name in ["A", "B", "C"]:
+    for name in ["A", "B", "C", "N"]:
         with open(os.path.join(work, "presets", name + ".ini"), "w") as f:
             f.write("Techniques=\nTechniqueSorting=\n")
     shutil.copy(os.path.join(common, "A.slangp"), os.path.join(work, "presets", "A.slangp"))
+    shutil.copy(os.path.join(common, "N.slangp"), os.path.join(work, "presets", "N.slangp"))
     with open(os.path.join(work, "ReShade.ini"), "w") as f:
         f.write("[GENERAL]\nEffectSearchPaths=.\\reshade-shaders\\Shaders\\**\n"
                 "PresetPath=.\\presets\\A.ini\nSkipLoadingDisabledEffects=0\n\n[OVERLAY]\nTutorialProgress=4\n")
+    if api == "d3d12" and args.dxc:
+        for dll in ["dxcompiler.dll", "dxil.dll"]:
+            shutil.copy(os.path.join(args.dxc, dll), work)
     if api != "vulkan":
         shutil.copy(args.reshade, os.path.join(work, RESHADE_NAME[api]))
         return {}
@@ -245,7 +268,33 @@ def run_api(args, api, work, common, results):
     else:
         check("10 sRGB back buffer           ", w("shots", "10.png"), c("exp_full4k.png"), c("full4k.png"))
 
+    if api == "d3d12" and supported:
+        # Without DirectX's shader compiler: untouched, reason logged, and no crash.
+        for dll in ["dxcompiler.dll", "dxil.dll"]:
+            if os.path.exists(w(dll)):
+                os.remove(w(dll))
+        code, err = host(300, f"250:shot={w('shots', '11.png')}", "--image", "0:" + c("full4k.png"))
+        add(code == 0, "11 no DirectX shader compiler  ", "ran to the end" if code == 0 else f"exit {code}")
+        if code == 0:
+            check("11 no DirectX shader compiler  ", w("shots", "11.png"), c("full4k.png"), c("full4k.png"), exact=True)
+            add(log_has("needs dxcompiler.dll"), "11 reason in ReShade.log       ", "needs dxcompiler.dll")
+
     if supported:
+        # Exact runs with the nearest-neighbour preset (see the top of this file).
+        exact_script = ";".join([f"1:preset={w('presets', 'N.ini')}", f"200:shot={w('shots', 'E1.png')}",
+                                 f"600:shot={w('shots', 'E2.png')}", f"1000:shot={w('shots', 'E3.png')}"])
+        code, err = host(1050, exact_script, "--image", "0:" + c("full4k.png"), "--image", "250:" + c("pillar4k.png"),
+                         "--resize", "650:1920x1080", "--image", "650:" + c("full1080.png"))
+        if code != 0:
+            add(False, "E exact runs                  ", f"test host exit {code}: {err[:200]}")
+        else:
+            check("E1 exact: 4K                   ", w("shots", "E1.png"), c("exact_full4k.png"), None, exact=True)
+            check("E2 exact: pillarbox, side art  ", w("shots", "E2.png"), c("exact_pillar4k.png"), None, exact=True)
+            check("E3 exact: 1080p                ", w("shots", "E3.png"), c("exact_full1080.png"), None, exact=True)
+
+        if api == "d3d12" and args.dxc:  # check 11 removed them
+            for dll in ["dxcompiler.dll", "dxil.dll"]:
+                shutil.copy(os.path.join(args.dxc, dll), work)
         os.remove(w("librashader.dll"))
         host(300, f"250:shot={w('shots', '9.png')}", "--image", "0:" + c("full4k.png"))
         check("9 librashader.dll missing     ", w("shots", "9.png"), c("full4k.png"), c("full4k.png"), exact=True)
@@ -260,12 +309,18 @@ def main():
     ap.add_argument("--preset", required=True)
     ap.add_argument("--native", required=True)
     ap.add_argument("--apis", default=",".join(ALL_APIS))
+    ap.add_argument("--dxc", default=newest_dxc(),
+                    help="folder with dxcompiler.dll and dxil.dll, needed for Direct3D 12 (default: the Windows SDK)")
     ap.add_argument("--build", default=os.path.join(REPO, "out", "build"))
     ap.add_argument("--work", default=os.path.join(REPO, "out", "e2e"))
     args = ap.parse_args()
 
     work = os.path.abspath(args.work)
-    rmtree(work)
+    # Empty the folder rather than removing it: a shell may still have it as its current folder.
+    os.makedirs(work, exist_ok=True)
+    for entry in os.listdir(work):
+        path = os.path.join(work, entry)
+        rmtree(path) if os.path.isdir(path) else os.remove(path)
     common = os.path.join(work, "common")
     prepare_common(args, common)
 
