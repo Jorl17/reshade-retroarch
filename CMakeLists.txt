@@ -49,6 +49,12 @@ target_link_libraries(RetroArchShaders PRIVATE rra_core)
 add_executable(detect_test tools/detect_test.cpp)
 target_link_libraries(detect_test PRIVATE rra_core windowscodecs ole32)
 
+add_executable(files_test tools/files_test.cpp)
+target_link_libraries(files_test PRIVATE rra_core)
+
+add_executable(params_test tools/params_test.cpp)
+target_link_libraries(params_test PRIVATE rra_core)
+
 add_executable(render_png tools/render_png.cpp)
 target_link_libraries(render_png PRIVATE rra_core windowscodecs ole32)
 

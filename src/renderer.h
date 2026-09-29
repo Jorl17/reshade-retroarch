@@ -52,6 +52,7 @@ private:
     ID3D11Texture2D *snap_tex_ = nullptr;
     ID3D11ShaderResourceView *snap_srv_ = nullptr;
     D3D11_TEXTURE2D_DESC snap_desc_ = {};
+    DXGI_FORMAT snap_format_ = DXGI_FORMAT_UNKNOWN; // the frame's format (the texture is typeless)
 
     ID3D11Texture2D *native_tex_ = nullptr;
     ID3D11RenderTargetView *native_rtv_ = nullptr;
@@ -61,4 +62,5 @@ private:
     ID3D11Texture2D *out_tex_ = nullptr;
     ID3D11RenderTargetView *out_rtv_ = nullptr;
     D3D11_TEXTURE2D_DESC out_desc_ = {};
+    DXGI_FORMAT out_format_ = DXGI_FORMAT_UNKNOWN;
 };

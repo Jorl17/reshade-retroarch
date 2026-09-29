@@ -1,4 +1,5 @@
 #include "discovery.h"
+#include "utf8.h"
 
 #include <windows.h>
 
@@ -6,6 +7,7 @@
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -45,7 +47,7 @@ std::vector<fs::path> steam_libraries()
         // VDF escapes backslashes.
         for (size_t i = p.find("\\\\"); i != std::string::npos; i = p.find("\\\\", i + 1))
             p.erase(i, 1);
-        libs.push_back(fs::u8path(p));
+        libs.push_back(path_from_utf8(p));
     }
     return libs;
 }
@@ -79,30 +81,63 @@ std::vector<ShaderRoot> find_shader_roots(const fs::path &addon_dir, const fs::p
         add("RetroArch (Steam)", lib / L"steamapps" / L"common" / L"RetroArch" / slang);
 
     for (const fs::path &p : extra)
-        add(p.filename().u8string(), p);
+        add(utf8_from_path(p.filename()), p);
     return roots;
 }
 
-std::vector<PresetEntry> scan_presets(const std::vector<ShaderRoot> &roots)
+std::vector<PresetEntry> scan_presets(const std::vector<ShaderRoot> &roots, const std::atomic<bool> &cancel,
+                                      int &skipped)
 {
     std::vector<PresetEntry> out;
+    std::unordered_set<std::wstring> visited; // canonical folders, so links cannot loop
+    skipped = 0;
+    auto first_visit = [&](const fs::path &dir) {
+        std::error_code ec;
+        const fs::path canon = fs::canonical(dir, ec);
+        std::wstring key = (ec ? dir : canon).wstring();
+        std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+        return visited.insert(key).second;
+    };
     for (const ShaderRoot &root : roots)
     {
-        std::error_code ec;
-        for (fs::recursive_directory_iterator it(root.dir, fs::directory_options::skip_permission_denied, ec), end;
-             it != end; it.increment(ec))
+        std::vector<fs::path> pending;
+        if (first_visit(root.dir))
+            pending.push_back(root.dir);
+        while (!pending.empty() && !cancel.load(std::memory_order_relaxed))
         {
+            const fs::path dir = std::move(pending.back());
+            pending.pop_back();
+            std::error_code ec;
+            fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
             if (ec)
-                break;
-            if (!it->is_regular_file(ec))
+            {
+                ++skipped; // e.g. a path too long for the game process: skip it, keep going
                 continue;
-            fs::path ext = it->path().extension();
-            std::wstring e = ext.wstring();
-            std::transform(e.begin(), e.end(), e.begin(), ::towlower);
-            if (e != L".slangp")
-                continue;
-            std::string rel = fs::relative(it->path(), root.dir, ec).generic_u8string();
-            out.push_back({root.name + "/" + rel, it->path()});
+            }
+            for (; it != end && !cancel.load(std::memory_order_relaxed); it.increment(ec))
+            {
+                if (ec)
+                {
+                    ++skipped;
+                    break;
+                }
+                const fs::path &path = it->path();
+                if (it->is_directory(ec)) // follows links
+                {
+                    if (!ec && first_visit(path))
+                        pending.push_back(path);
+                    continue;
+                }
+                if (!it->is_regular_file(ec))
+                    continue;
+                std::wstring e = path.extension().wstring();
+                std::transform(e.begin(), e.end(), e.begin(), ::towlower);
+                if (e != L".slangp")
+                    continue;
+                // Lexical: through a link, fs::relative would resolve it and give "../..".
+                const fs::path rel = path.lexically_relative(root.dir);
+                out.push_back({root.name + "/" + utf8_from_path(rel.empty() ? path.filename() : rel, true), path});
+            }
         }
     }
     std::sort(out.begin(), out.end(), [](const PresetEntry &a, const PresetEntry &b) { return a.label < b.label; });

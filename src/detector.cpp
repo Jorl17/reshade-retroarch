@@ -172,6 +172,18 @@ void GridDetector::consume(const PixelGrid &result, const std::string &log)
     if (!result.valid)
         return; // keep the current grid through menus, fades and loading screens
 
+    // A piece of the grid in use (same cells, inside it) with no bars around it is not
+    // a new picture: it is what is left visible around a title card, text box or menu,
+    // often on a dark screen. A genuine smaller picture (e.g. a resolution change at
+    // integer scale) is surrounded by bars, which makes it `bounded`.
+    if (grid_.valid && !provisional_ && !result.bounded && part_of(result, grid_))
+    {
+        grid_.match = result.match;
+        candidate_ = PixelGrid();
+        candidate_hits_ = 0;
+        return;
+    }
+
     if (result.same_as(candidate_))
         ++candidate_hits_;
     else
@@ -186,7 +198,10 @@ void GridDetector::consume(const PixelGrid &result, const std::string &log)
         provisional_ = false;
         return;
     }
-    const int needed = (grid_.valid && !provisional_) ? 2 : 1;
+    // Growing from such a piece (adopted when there was nothing better, e.g. the game
+    // started on a title card) to a bounded picture that contains it: adopt at once.
+    const bool grows_out_of_piece = grid_.valid && !grid_.bounded && result.bounded && part_of(grid_, result);
+    const int needed = (grid_.valid && !provisional_ && !grows_out_of_piece) ? 2 : 1;
     if (candidate_hits_ >= needed)
     {
         grid_ = result;

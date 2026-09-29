@@ -4,13 +4,14 @@
 // frames, drawing PNGs into the back buffer. Resolution changes are scripted:
 //
 //   test_host --frames N [--size WxH] [--image F:path.png]... [--resize F:WxH]...
-//             [--format rgba8|rgb10a2] [--hdr10 1]
+//             [--format rgba8|rgba8srgb|rgb10a2] [--hdr10 1]
 //
 // --image F:path   from frame F, draw this image (it must match the back buffer
 //                  size; mismatched frames are cleared to black)
 // --resize F:WxH   at frame F, resize the swap chain buffers (like a game switching
 //                  resolution or toggling fullscreen)
-// --format         back buffer format (default rgba8)
+// --format         back buffer format (default rgba8); rgba8srgb uses a bitblt swap
+//                  chain, because flip-model swap chains cannot be sRGB
 // --hdr10 1        switch the swap chain to HDR10 (ST.2084), like a game with HDR on
 //
 // Put ReShade's d3d11.dll (and any add-ons) next to this executable.
@@ -61,7 +62,9 @@ int wmain(int argc, wchar_t **argv)
         if (opt == L"--frames")
             frames = _wtoi(val.c_str());
         else if (opt == L"--format")
-            format = val == L"rgb10a2" ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+            format = val == L"rgb10a2"     ? DXGI_FORMAT_R10G10B10A2_UNORM
+                     : val == L"rgba8srgb" ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+                                           : DXGI_FORMAT_R8G8B8A8_UNORM;
         else if (opt == L"--hdr10")
             hdr10 = val == L"1";
         else if (opt == L"--size")
@@ -94,10 +97,11 @@ int wmain(int argc, wchar_t **argv)
     sd.BufferDesc.Format = format;
     sd.SampleDesc.Count = 1;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.BufferCount = 2;
+    const bool bitblt = format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    sd.BufferCount = bitblt ? 1 : 2;
     sd.OutputWindow = hwnd;
     sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    sd.SwapEffect = bitblt ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_DISCARD;
     IDXGISwapChain *swap = nullptr;
     ID3D11Device *dev = nullptr;
     ID3D11DeviceContext *ctx = nullptr;

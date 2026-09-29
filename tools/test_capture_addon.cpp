@@ -8,6 +8,8 @@
 
 #include <reshade.hpp>
 
+#include <d3d11.h>
+
 #include "png_io.h"
 
 #include <cstdlib>
@@ -52,17 +54,95 @@ void parse(const std::string &script)
     }
 }
 
+// Reads the frame back as 8-bit RGBA, whatever the back buffer format. (ReShade's
+// capture_screenshot returns 10-bit frames still packed, and fails for sRGB ones.)
+bool read_frame(reshade::api::effect_runtime *runtime, reshade::api::resource_view rtv, std::vector<uint8_t> &out,
+                uint32_t &w, uint32_t &h)
+{
+    auto *res = reinterpret_cast<ID3D11Resource *>(runtime->get_device()->get_resource_from_view(rtv).handle);
+    auto *dev = reinterpret_cast<ID3D11Device *>(runtime->get_device()->get_native());
+    auto *ctx = reinterpret_cast<ID3D11DeviceContext *>(
+        runtime->get_command_queue()->get_immediate_command_list()->get_native());
+    ID3D11Texture2D *tex = nullptr;
+    if (res == nullptr || FAILED(res->QueryInterface(IID_PPV_ARGS(&tex))))
+        return false;
+    D3D11_TEXTURE2D_DESC d;
+    tex->GetDesc(&d);
+    const DXGI_FORMAT format = d.Format;
+    d.Usage = D3D11_USAGE_STAGING;
+    d.BindFlags = 0;
+    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    d.MiscFlags = 0;
+    ID3D11Texture2D *staging = nullptr;
+    bool ok = d.SampleDesc.Count == 1 && SUCCEEDED(dev->CreateTexture2D(&d, nullptr, &staging));
+    D3D11_MAPPED_SUBRESOURCE m = {};
+    if (ok)
+    {
+        ctx->CopyResource(staging, tex);
+        ok = SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m));
+    }
+    if (ok)
+    {
+        w = d.Width;
+        h = d.Height;
+        out.resize(size_t(w) * h * 4);
+        for (uint32_t y = 0; y < h; ++y)
+        {
+            const uint8_t *src = static_cast<const uint8_t *>(m.pData) + size_t(y) * m.RowPitch;
+            uint8_t *dst = out.data() + size_t(y) * w * 4;
+            for (uint32_t x = 0; x < w; ++x, src += 4, dst += 4)
+            {
+                switch (format)
+                {
+                case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+                case DXGI_FORMAT_R10G10B10A2_UNORM:
+                {
+                    uint32_t v;
+                    memcpy(&v, src, 4);
+                    dst[0] = uint8_t((v & 0x3FF) >> 2);
+                    dst[1] = uint8_t(((v >> 10) & 0x3FF) >> 2);
+                    dst[2] = uint8_t(((v >> 20) & 0x3FF) >> 2);
+                    dst[3] = 255;
+                    break;
+                }
+                case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+                case DXGI_FORMAT_B8G8R8A8_UNORM:
+                case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+                case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+                case DXGI_FORMAT_B8G8R8X8_UNORM:
+                case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+                    dst[0] = src[2];
+                    dst[1] = src[1];
+                    dst[2] = src[0];
+                    dst[3] = 255;
+                    break;
+                default: // R8G8B8A8 family (the stored bytes, sRGB or not)
+                    dst[0] = src[0];
+                    dst[1] = src[1];
+                    dst[2] = src[2];
+                    dst[3] = 255;
+                    break;
+                }
+            }
+        }
+        ctx->Unmap(staging, 0);
+    }
+    if (staging != nullptr)
+        staging->Release();
+    tex->Release();
+    return ok;
+}
+
 void on_finish_effects(reshade::api::effect_runtime *runtime, reshade::api::command_list *,
-                       reshade::api::resource_view, reshade::api::resource_view)
+                       reshade::api::resource_view rtv, reshade::api::resource_view)
 {
     for (const Step &s : g_steps)
     {
         if (s.frame != g_frame || s.action != "shot")
             continue;
         uint32_t w = 0, h = 0;
-        runtime->get_screenshot_width_and_height(&w, &h);
-        std::vector<uint8_t> pixels(size_t(w) * h * 4);
-        const bool ok = runtime->capture_screenshot(pixels.data()) && save_png(widen(s.arg).c_str(), pixels.data(), w, h, w * 4);
+        std::vector<uint8_t> pixels;
+        const bool ok = read_frame(runtime, rtv, pixels, w, h) && save_png(widen(s.arg).c_str(), pixels.data(), w, h, w * 4);
         reshade::log::message(ok ? reshade::log::level::info : reshade::log::level::error,
                               ("test capture: frame " + std::to_string(g_frame) + " -> " + s.arg).c_str());
     }

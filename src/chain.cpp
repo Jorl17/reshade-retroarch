@@ -1,6 +1,78 @@
 #include "chain.h"
 #include "librashader_api.h"
 
+#include <cmath>
+
+namespace
+{
+// The parameters of a loaded preset, each with the value the preset gives it: its own
+// setting if any .slangp in the #reference chain sets it (the last one wins, as in the
+// filter chain), otherwise the shader's default. (libra_preset_get_param is not used:
+// it returns the first setting, and nothing at all for parameters the preset does not
+// set.)
+bool read_params(libra_shader_preset_t &preset, std::vector<ShaderParam> &out, std::string &error)
+{
+    const libra_instance_t &api = libra::api();
+    out.clear();
+    libra_preset_param_list_t list = {};
+    if (libra_error_t err = api.preset_get_runtime_params(&preset, &list))
+    {
+        error = libra::take_error(err);
+        return false;
+    }
+    for (uint64_t i = 0; i < list.length; ++i)
+    {
+        const libra_preset_param_t &p = list.parameters[i];
+        ShaderParam sp;
+        sp.name = p.name ? p.name : "";
+        sp.description = p.description ? p.description : sp.name;
+        sp.initial = p.initial;
+        sp.value = p.initial;
+        sp.minimum = p.minimum;
+        sp.maximum = p.maximum;
+        sp.step = p.step;
+        out.push_back(sp);
+    }
+    api.preset_free_runtime_params(list);
+    return true;
+}
+} // namespace
+
+bool read_preset_params(const std::string &preset_path, std::vector<ShaderParam> &out, std::string &error)
+{
+    if (!libra::loaded())
+    {
+        error = "librashader is not loaded";
+        return false;
+    }
+    const libra_instance_t &api = libra::api();
+    libra_shader_preset_t preset = nullptr;
+    if (libra_error_t err = api.preset_create(preset_path.c_str(), &preset))
+    {
+        error = libra::take_error(err);
+        return false;
+    }
+    const bool ok = read_params(preset, out, error);
+    api.preset_free(&preset);
+    return ok;
+}
+
+std::vector<std::pair<std::string, float>> param_overrides(const std::vector<ShaderParam> &current,
+                                                           const std::vector<ShaderParam> &base)
+{
+    std::vector<std::pair<std::string, float>> out;
+    for (const ShaderParam &p : current)
+    {
+        const ShaderParam *b = nullptr;
+        for (const ShaderParam &x : base)
+            if (x.name == p.name)
+                b = &x;
+        if (b == nullptr || std::fabs(p.value - b->initial) > 1e-6f)
+            out.emplace_back(p.name, p.value);
+    }
+    return out;
+}
+
 bool ShaderChain::create(ID3D11Device *device, const std::string &preset_path, std::string &error)
 {
     destroy();
@@ -18,27 +90,10 @@ bool ShaderChain::create(ID3D11Device *device, const std::string &preset_path, s
         return false;
     }
 
-    // Parameters, with the values this preset sets (it may override defaults).
-    libra_preset_param_list_t list = {};
-    if (api.preset_get_runtime_params(&preset, &list) == nullptr)
+    if (!read_params(preset, params_, error))
     {
-        for (uint64_t i = 0; i < list.length; ++i)
-        {
-            const libra_preset_param_t &p = list.parameters[i];
-            ShaderParam sp;
-            sp.name = p.name ? p.name : "";
-            sp.description = p.description ? p.description : sp.name;
-            sp.initial = p.initial;
-            sp.minimum = p.minimum;
-            sp.maximum = p.maximum;
-            sp.step = p.step;
-            sp.value = p.initial;
-            float v = 0;
-            if (api.preset_get_param(&preset, sp.name.c_str(), &v) == nullptr)
-                sp.value = v;
-            params_.push_back(sp);
-        }
-        api.preset_free_runtime_params(list);
+        api.preset_free(&preset);
+        return false;
     }
 
     filter_chain_d3d11_opt_t opt = {};

@@ -16,6 +16,7 @@ TestCapture add-on, so it never needs keyboard focus):
 Then separate runs:
   7. 10-bit SDR back buffer                        -> matches an offline render
   8. HDR10 output                                  -> frame untouched, reason logged
+  10. sRGB back buffer (bitblt swap chain)         -> matches an offline render
   9. no librashader.dll                            -> frame untouched, reason logged
 
 The only effect file installed is the placeholder RetroArchShaders.fx, which also
@@ -185,6 +186,12 @@ def main():
         with open(w("ReShade.log"), encoding="utf-8", errors="ignore") as f:
             logged = "HDR output is not supported" in f.read()
         results.append((logged, "8 HDR refusal reported in ReShade.log", "yes" if logged else "no"))
+
+    # sRGB back buffer (bitblt swap chain): the shader must see the stored values, as with UNORM.
+    env = dict(os.environ, RRA_TEST_SCRIPT=f"250:shot={w('shots', '10.png')}")
+    subprocess.run([w("test_host.exe"), "--frames", "300", "--format", "rgba8srgb", "--image", "0:" + w("full4k.png")],
+                   env=env, cwd=work, check=True, capture_output=True)
+    check("10 sRGB back buffer           == offline render", w("shots", "10.png"), w("exp_full4k.png"))
 
     # Last run: no librashader.dll.
     os.remove(w("librashader.dll"))

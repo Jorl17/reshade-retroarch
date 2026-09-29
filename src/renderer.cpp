@@ -37,6 +37,26 @@ DXGI_FORMAT unorm_view(DXGI_FORMAT f)
     }
 }
 
+// Typeless member of the format's family. Textures that are viewed with a format
+// other than their own (an sRGB frame viewed as UNORM) must be created typeless;
+// copies between a typed and a typeless texture of the same family are allowed.
+DXGI_FORMAT typeless(DXGI_FORMAT f)
+{
+    switch (unorm_view(f))
+    {
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+        return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+        return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8X8_UNORM:
+        return DXGI_FORMAT_B8G8R8X8_TYPELESS;
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+        return DXGI_FORMAT_R10G10B10A2_TYPELESS;
+    default:
+        return f;
+    }
+}
+
 struct CaptureParams
 {
     uint32_t rect[4];
@@ -83,6 +103,7 @@ void Renderer::shutdown()
     release(out_rtv_);
     release(out_tex_);
     out_desc_ = {};
+    out_format_ = DXGI_FORMAT_UNKNOWN;
     release(native_srv_);
     release(native_rtv_);
     release(native_tex_);
@@ -90,6 +111,7 @@ void Renderer::shutdown()
     release(snap_srv_);
     release(snap_tex_);
     snap_desc_ = {};
+    snap_format_ = DXGI_FORMAT_UNKNOWN;
     release(cb_);
     release(ps_);
     release(vs_);
@@ -107,7 +129,7 @@ ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *f
     }
 
     if (snap_tex_ == nullptr || fd.Width != snap_desc_.Width || fd.Height != snap_desc_.Height ||
-        fd.Format != snap_desc_.Format)
+        fd.Format != snap_format_)
     {
         release(snap_srv_);
         release(snap_tex_);
@@ -117,7 +139,7 @@ ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *f
         d.Height = fd.Height;
         d.MipLevels = 1;
         d.ArraySize = 1;
-        d.Format = fd.Format;
+        d.Format = typeless(fd.Format);
         d.SampleDesc.Count = 1;
         d.Usage = D3D11_USAGE_DEFAULT;
         d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -133,10 +155,12 @@ ID3D11Texture2D *Renderer::snapshot(ID3D11DeviceContext *ctx, ID3D11Texture2D *f
             return nullptr;
         }
         snap_desc_ = d;
+        snap_format_ = fd.Format;
     }
 
+    // A typed source must be resolved with its own format; a typeless one with the view format.
     if (fd.SampleDesc.Count > 1)
-        ctx->ResolveSubresource(snap_tex_, 0, frame, 0, unorm_view(fd.Format));
+        ctx->ResolveSubresource(snap_tex_, 0, frame, 0, typeless(fd.Format) == fd.Format ? unorm_view(fd.Format) : fd.Format);
     else
         ctx->CopyResource(snap_tex_, frame);
     return snap_tex_;
@@ -177,19 +201,19 @@ bool Renderer::ensure_native(int w, int h, std::string &error)
 
 bool Renderer::ensure_output(int w, int h, DXGI_FORMAT format, std::string &error)
 {
-    if (out_tex_ != nullptr && UINT(w) == out_desc_.Width && UINT(h) == out_desc_.Height && format == out_desc_.Format)
+    if (out_tex_ != nullptr && UINT(w) == out_desc_.Width && UINT(h) == out_desc_.Height && format == out_format_)
         return true;
     release(out_rtv_);
     release(out_tex_);
     out_desc_ = {};
 
-    // Same format as the frame, so it can be copied into it.
+    // Same format family as the frame, so it can be copied into it.
     D3D11_TEXTURE2D_DESC d = {};
     d.Width = UINT(w);
     d.Height = UINT(h);
     d.MipLevels = 1;
     d.ArraySize = 1;
-    d.Format = format;
+    d.Format = typeless(format);
     d.SampleDesc.Count = 1;
     d.Usage = D3D11_USAGE_DEFAULT;
     d.BindFlags = D3D11_BIND_RENDER_TARGET;
@@ -205,6 +229,7 @@ bool Renderer::ensure_output(int w, int h, DXGI_FORMAT format, std::string &erro
         return false;
     }
     out_desc_ = d;
+    out_format_ = format;
     return true;
 }
 

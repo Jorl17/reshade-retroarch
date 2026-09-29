@@ -10,5 +10,5 @@ expects to sit in RetroArch's shaders_slang folder.
 If RetroArch is installed, its shaders are found automatically and this folder
 can stay empty.
 
-Then start the game, press Home, open the "RetroArch Shaders" tab, pick a preset
+Then start the game, press Home, open the "RetroArch Shaders" window, pick a preset
 and press "Use for this ReShade preset".

@@ -13,6 +13,7 @@ struct PixelGrid
     int native_w = 0, native_h = 0;             // native resolution
     int rect_x = 0, rect_y = 0, rect_w = 0, rect_h = 0; // area of the frame it covers
     float match = 0.0f;                         // validation score, 0..1
+    bool bounded = false; // its edges are the picture's edges: the whole frame, or uniform bars around it
 
     bool same_as(const PixelGrid &o) const
     {
@@ -39,6 +40,10 @@ inline int cell_centre(int origin, int extent, int count, int i)
 {
     return origin + int((int64_t(2 * i + 1) * extent) / (2 * int64_t(count)));
 }
+
+// True when `piece` lies inside `whole` on the same pixel grid (same cell size, cell
+// edges lined up): a part of that picture rather than a different one.
+bool part_of(const PixelGrid &piece, const PixelGrid &whole);
 
 // Detects the native grid of a frame produced by stretching a low resolution image
 // with nearest-neighbour sampling, optionally with smoothed cell edges (as "sharp"

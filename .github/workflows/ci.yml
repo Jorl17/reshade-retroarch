@@ -36,6 +36,11 @@ jobs:
         run: |
           python tests/make_synthetic.py --procedural out/synthetic
           out/build/detect_test.exe out/synthetic/manifest.txt
+          out/build/detect_test.exe --rules
+
+      - name: File handling tests
+        shell: bash
+        run: out/build/files_test.exe
 
       - name: Package
         shell: bash

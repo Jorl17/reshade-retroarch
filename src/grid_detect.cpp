@@ -16,12 +16,35 @@ std::string PixelGrid::describe() const
     return s.str();
 }
 
+bool part_of(const PixelGrid &piece, const PixelGrid &whole)
+{
+    if (!piece.valid || !whole.valid)
+        return false;
+    // Same pixel count over the same span. (Comparing pixel sizes alone is not enough:
+    // Sonic Origins' 4:3 mode puts 320 pixels where its 424x240 widescreen grid has 318,
+    // with edges that line up.)
+    const double ww = double(whole.rect_w) / whole.native_w, wh = double(whole.rect_h) / whole.native_h;
+    if (std::fabs(piece.rect_w / ww - piece.native_w) > 0.5 || std::fabs(piece.rect_h / wh - piece.native_h) > 0.5)
+        return false;
+    auto aligned = [](int offset, double cell) {
+        return std::fabs(offset - std::round(offset / cell) * cell) <= 1.5;
+    };
+    return piece.rect_x >= whole.rect_x - 1 && piece.rect_y >= whole.rect_y - 1 &&
+           piece.rect_x + piece.rect_w <= whole.rect_x + whole.rect_w + 1 &&
+           piece.rect_y + piece.rect_h <= whole.rect_y + whole.rect_h + 1 &&
+           aligned(piece.rect_x - whole.rect_x, ww) && aligned(piece.rect_y - whole.rect_y, wh);
+}
+
 namespace
 {
 // Minimum validation score: fraction of cell-interior pixels equal to their cell's
 // centre pixel. Nearest and "sharp" stretches score ~1.0; smooth upscales and HD
 // overlays score far lower.
 constexpr float kAcceptMatch = 0.97f;
+// Score above which cells next to a placement count as the same grid carrying on.
+// Lower than kAcceptMatch: a thin band of small cells suffers more from rounding.
+// HD art, gradients and video score far lower.
+constexpr float kContinueMatch = 0.90f;
 // Minimum number of consistently spaced cell edges per axis before a period is trusted.
 constexpr int kMinEdges = 24;
 constexpr double kMinPeriod = 2.0;  // native pixels must be at least 2 frame pixels wide
@@ -410,6 +433,77 @@ float validate(const FrameView &f, const Span &sx, const Span &sy, int &cells_wi
     }
     return total == 0 ? 0.0f : float(double(same) / double(total));
 }
+// Whether the placement's grid carries on past any of its edges: a few more cells
+// on the same grid, validating as cells and with content in them (not a uniform
+// border). A real picture ends where its grid ends; a placement whose grid goes on
+// is a piece of a larger picture, found because something (an HD pause menu, a
+// title card, a text box) covers the rest of it.
+bool grid_continues(const FrameView &f, const Span &sx, const Span &sy, std::string &side)
+{
+    const int bpp = f.bytes_per_pixel;
+    // Up to 4 whole cells beside the placement on one axis, on the same grid.
+    auto band = [](const Span &s, int frame_extent, bool before, Span &out) {
+        const double cell = double(s.extent) / s.count;
+        const int room = before ? s.origin : frame_extent - (s.origin + s.extent);
+        const int n = std::min(4, int(room / cell));
+        if (n < 2)
+            return false;
+        const double o = before ? s.origin - n * cell : double(s.origin + s.extent);
+        out.origin = int(std::lround(o));
+        out.extent = int(std::lround(o + n * cell)) - out.origin;
+        out.count = n;
+        return out.origin >= 0 && out.origin + out.extent <= frame_extent && out.extent >= 2 * n;
+    };
+    // Neighbouring cells (both directions) whose centres differ.
+    auto detail = [&](const Span &bx, const Span &by, int &pairs) {
+        int differ = 0;
+        pairs = 0;
+        for (int j = 0; j < by.count; ++j)
+            for (int i = 0; i < bx.count; ++i)
+            {
+                const uint8_t *c = px(f, cell_centre(bx.origin, bx.extent, bx.count, i),
+                                      cell_centre(by.origin, by.extent, by.count, j));
+                if (i > 0)
+                {
+                    ++pairs;
+                    differ += std::memcmp(c, px(f, cell_centre(bx.origin, bx.extent, bx.count, i - 1),
+                                                cell_centre(by.origin, by.extent, by.count, j)),
+                                          size_t(bpp)) != 0;
+                }
+                if (j > 0)
+                {
+                    ++pairs;
+                    differ += std::memcmp(c, px(f, cell_centre(bx.origin, bx.extent, bx.count, i),
+                                                cell_centre(by.origin, by.extent, by.count, j - 1)),
+                                          size_t(bpp)) != 0;
+                }
+            }
+        return differ;
+    };
+    struct Side
+    {
+        const char *name;
+        bool x_axis, before;
+    };
+    for (const Side &sd : {Side{"left", true, true}, Side{"right", true, false}, Side{"top", false, true},
+                           Side{"bottom", false, false}})
+    {
+        Span bx = sx, by = sy;
+        if (!(sd.x_axis ? band(sx, f.width, sd.before, bx) : band(sy, f.height, sd.before, by)))
+            continue;
+        int unused = 0, pairs = 0;
+        const float m = validate(f, bx, by, unused);
+        if (m < kContinueMatch)
+            continue; // not cells: HD art, video, a smooth border
+        const int differ = detail(bx, by, pairs);
+        if (differ >= std::max(8, pairs / 20)) // content, not a flat border
+        {
+            side = sd.name;
+            return true;
+        }
+    }
+    return false;
+}
 } // namespace
 
 PixelGrid detect_grid(const FrameView &f, std::string *log)
@@ -506,6 +600,17 @@ PixelGrid detect_grid(const FrameView &f, std::string *log)
     g.rect_h = pick.y->extent;
     g.match = pick.m;
     g.valid = pick.m >= kAcceptMatch;
+    const bool full = g.rect_x == 0 && g.rect_y == 0 && g.rect_w == f.width && g.rect_h == f.height;
+    g.bounded = full || &pick == &framed;
     out << "best " << g.native_w << "x" << g.native_h << " match " << pick.m << (bordered ? " (bordered)" : "");
-    return finish(g.valid ? "" : " (rejected)");
+    if (!g.valid)
+        return finish(" (rejected)");
+    std::string side;
+    if (!full && grid_continues(f, *pick.x, *pick.y, side))
+    {
+        g.valid = false;
+        out << " at (" << g.rect_x << "," << g.rect_y << "," << g.rect_w << "x" << g.rect_h << ")";
+        return finish((" (rejected: the grid continues past its " + side + " edge, so it is part of a larger picture)").c_str());
+    }
+    return finish("");
 }
