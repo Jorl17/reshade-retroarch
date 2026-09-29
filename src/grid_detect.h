@@ -4,7 +4,7 @@
 // to fill a 1080p or 4K window; RetroArch shaders need that small picture. detect_grid()
 // works out, from one frame in CPU memory, the native resolution and where the stretched
 // picture sits. It knows nothing about Direct3D: detector.h feeds it frames copied back
-// from the GPU, and capture.hlsl uses its result to rebuild the small picture on the GPU.
+// from the GPU, and the capture shader (capture.slang) uses its result to rebuild the small picture on the GPU.
 
 #include <cstddef>
 #include <cstdint>
@@ -56,7 +56,7 @@ struct FrameView
 // Returns the frame coordinate of the pixel at the centre of native pixel `i` along one
 // axis, when `count` native pixels are stretched over `extent` frame pixels starting at
 // frame coordinate `origin`: origin + floor((i + 0.5) * extent / count), computed with
-// integers so there is no rounding error. capture.hlsl (the GPU shader that rebuilds the
+// integers so there is no rounding error. capture.slang (the GPU shader that rebuilds the
 // native picture) uses the same formula, so it reads exactly the pixels detection checked.
 inline int cell_centre(int origin, int extent, int count, int i)
 {

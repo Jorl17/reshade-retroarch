@@ -1,14 +1,11 @@
 // Implementation of renderer.h: copies the game's frame, rebuilds the native
-// (original, low-resolution) picture from it with the capture shader, runs the
+// (original, low-resolution) picture from it with the capture preset, runs the
 // RetroArch preset on that picture and copies the result back into the frame.
 // Everything here is Direct3D 11.
 
 #include "renderer.h"
 
-// The capture shader (capture.hlsl), compiled at build time into byte arrays
-// g_capture_ps and g_capture_vs (see CMakeLists.txt).
-#include "capture_ps.h"
-#include "capture_vs.h"
+#include "capture.h"
 
 namespace
 {
@@ -79,17 +76,6 @@ DXGI_FORMAT typeless(DXGI_FORMAT f)
     }
 }
 
-// The values the capture pixel shader reads, laid out exactly like the `CaptureParams`
-// constant buffer in capture.hlsl: the rectangle of the frame the game's stretched
-// picture covers (x, y, width, height, in frame pixels) and the picture's native
-// resolution (width, height). `padding` rounds the size up to 32 bytes, because
-// Direct3D 11 constant buffers must be a multiple of 16 bytes long.
-struct CaptureParams
-{
-    uint32_t rect[4];
-    uint32_t native[2];
-    uint32_t padding[2];
-};
 }
 
 // Returns true for the frame formats the capture can read (see renderer.h).
@@ -107,21 +93,16 @@ bool Renderer::supported_format(DXGI_FORMAT f)
     }
 }
 
-// Creates the capture shaders and their constant buffer on `device`. Returns false and
-// sets `error` if any of them cannot be created, leaving the renderer empty.
+// Loads the capture preset for `device`. Returns false and sets `error` if it cannot be
+// loaded, leaving the renderer empty.
 bool Renderer::init(ID3D11Device *device, std::string &error)
 {
     shutdown();
     device_ = device;
-    D3D11_BUFFER_DESC cbd = {};
-    cbd.ByteWidth = sizeof(CaptureParams);
-    cbd.Usage = D3D11_USAGE_DEFAULT;
-    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    if (FAILED(device->CreateVertexShader(g_capture_vs, sizeof(g_capture_vs), nullptr, &vs_)) ||
-        FAILED(device->CreatePixelShader(g_capture_ps, sizeof(g_capture_ps), nullptr, &ps_)) ||
-        FAILED(device->CreateBuffer(&cbd, nullptr, &cb_)))
+    const std::string preset = capture_preset_path(error);
+    if (preset.empty() || !capture_.create(device, preset, error))
     {
-        error = "could not create the capture shader";
+        error = "could not load the capture shader: " + error;
         shutdown();
         return false;
     }
@@ -143,9 +124,8 @@ void Renderer::shutdown()
     release(snap_tex_);
     snap_desc_ = {};
     snap_format_ = DXGI_FORMAT_UNKNOWN;
-    release(cb_);
-    release(ps_);
-    release(vs_);
+    capture_.destroy();
+    capture_grid_ = PixelGrid();
     device_ = nullptr;
 }
 
@@ -302,45 +282,12 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
     if (!ensure_native(grid.native_w, grid.native_h, error))
         return false;
 
-    // Step 1: rebuild the native image. Pass the grid to the capture shader, then draw
-    // one triangle covering the whole native_w x native_h target; the pixel shader runs
-    // once per native pixel and copies the frame pixel at the centre of that pixel's
-    // block (capture.hlsl).
-    const CaptureParams params = {
-        {uint32_t(grid.rect_x), uint32_t(grid.rect_y), uint32_t(grid.rect_w), uint32_t(grid.rect_h)},
-        {uint32_t(grid.native_w), uint32_t(grid.native_h)},
-        {0, 0}};
-    ctx->UpdateSubresource(cb_, 0, nullptr, &params, 0, 0);
-
-    // Clear pixel shader input slot 0 first, so a view of native_tex_ left there (for
-    // example by the previous frame's shader chain) is not bound as an input while
-    // native_tex_ becomes the render target; Direct3D 11 does not allow a texture to be
-    // both at once. Then set up the pipeline from scratch: default rasterizer, blend and
-    // depth-stencil states (no blending; no depth buffer is bound, so no depth test), no
-    // vertex buffer (the vertex shader makes the triangle from the vertex numbers alone),
-    // and only the capture shaders.
-    ID3D11ShaderResourceView *null_srv = nullptr;
-    ID3D11RenderTargetView *null_rtv = nullptr;
-    ctx->PSSetShaderResources(0, 1, &null_srv);
-    ctx->OMSetRenderTargets(1, &native_rtv_, nullptr);
-    const D3D11_VIEWPORT vp = {0.0f, 0.0f, float(grid.native_w), float(grid.native_h), 0.0f, 1.0f};
-    ctx->RSSetViewports(1, &vp);
-    ctx->RSSetState(nullptr);
-    ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-    ctx->OMSetDepthStencilState(nullptr, 0);
-    ctx->IASetInputLayout(nullptr);
-    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx->VSSetShader(vs_, nullptr, 0);
-    ctx->GSSetShader(nullptr, nullptr, 0);
-    ctx->HSSetShader(nullptr, nullptr, 0);
-    ctx->DSSetShader(nullptr, nullptr, 0);
-    ctx->PSSetShader(ps_, nullptr, 0);
-    ctx->PSSetConstantBuffers(0, 1, &cb_);
-    ctx->PSSetShaderResources(0, 1, &snap_srv_);
-    ctx->Draw(3, 0);
-    // Unbind the snapshot and native_tex_ so the shader chain can read native_tex_.
-    ctx->PSSetShaderResources(0, 1, &null_srv);
-    ctx->OMSetRenderTargets(1, &null_rtv, nullptr);
+    // Step 1: rebuild the native image: run the capture preset on the snapshot, into
+    // native_tex_ (native_w x native_h). Its one pass writes each native pixel from the
+    // frame pixel at the centre of that pixel's block (capture.slang).
+    if (!set_capture_grid(grid, error) ||
+        !capture_.frame(ctx, snap_srv_, native_rtv_, 0, 0, grid.native_w, grid.native_h, frame_count, error))
+        return false;
 
     // The final copy needs `dst` to have one sample per pixel, like out_tex_.
     D3D11_TEXTURE2D_DESC dd;
@@ -358,5 +305,21 @@ bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderCha
         return false;
     const D3D11_BOX box = {0, 0, 0, UINT(grid.rect_w), UINT(grid.rect_h), 1};
     ctx->CopySubresourceRegion(dst, 0, UINT(grid.rect_x), UINT(grid.rect_y), 0, out_tex_, 0, &box);
+    return true;
+}
+
+// Sets the capture preset's six parameters (capture.slang) from `grid`, skipping the
+// work when the grid has not changed since the last call.
+bool Renderer::set_capture_grid(const PixelGrid &grid, std::string &error)
+{
+    if (grid.same_as(capture_grid_))
+        return true;
+    const std::pair<const char *, int> values[] = {
+        {"rra_rect_x", grid.rect_x},       {"rra_rect_y", grid.rect_y},       {"rra_rect_w", grid.rect_w},
+        {"rra_rect_h", grid.rect_h},       {"rra_native_w", grid.native_w}, {"rra_native_h", grid.native_h}};
+    for (const auto &[name, value] : values)
+        if (!capture_.set_param(name, float(value), error))
+            return false;
+    capture_grid_ = grid;
     return true;
 }

@@ -12,16 +12,14 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_compile_options(/W4 /permissive- /utf-8 /EHsc /external:W0)
 add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 
-# Capture shader, compiled to bytecode headers.
-find_program(FXC fxc REQUIRED HINTS "$ENV{WindowsSdkVerBinPath}x64" "$ENV{WindowsSdkBinPath}$ENV{WindowsSDKVersion}x64")
+# The capture shader and preset (src/capture.slang, src/capture.slangp), built into the
+# program as text in a generated header (see src/capture.h). CMake re-runs when they change.
 set(GEN ${CMAKE_BINARY_DIR}/generated)
-add_custom_command(
-    OUTPUT ${GEN}/capture_vs.h ${GEN}/capture_ps.h
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${GEN}
-    COMMAND ${FXC} /nologo /T vs_5_0 /E VSMain /O3 /Fh ${GEN}/capture_vs.h /Vn g_capture_vs ${CMAKE_SOURCE_DIR}/src/capture.hlsl
-    COMMAND ${FXC} /nologo /T ps_5_0 /E PSMain /O3 /Fh ${GEN}/capture_ps.h /Vn g_capture_ps ${CMAKE_SOURCE_DIR}/src/capture.hlsl
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/capture.hlsl
-    VERBATIM)
+file(READ ${CMAKE_SOURCE_DIR}/src/capture.slang CAPTURE_SLANG)
+file(READ ${CMAKE_SOURCE_DIR}/src/capture.slangp CAPTURE_SLANGP)
+configure_file(${CMAKE_SOURCE_DIR}/src/capture_slang.h.in ${GEN}/capture_slang.h @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             ${CMAKE_SOURCE_DIR}/src/capture.slang ${CMAKE_SOURCE_DIR}/src/capture.slangp)
 
 # Everything that is not ReShade specific; shared by the add-on and the tools.
 add_library(rra_core STATIC
@@ -32,8 +30,7 @@ add_library(rra_core STATIC
     src/librashader_api.cpp
     src/discovery.cpp
     src/companion.cpp
-    ${GEN}/capture_vs.h
-    ${GEN}/capture_ps.h)
+    src/capture.cpp)
 target_include_directories(rra_core PUBLIC src ${GEN})
 # Third-party headers are "external": their warnings are not ours to fix.
 target_include_directories(rra_core SYSTEM PUBLIC third_party/librashader)

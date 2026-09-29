@@ -22,8 +22,10 @@
 // art at a low resolution (for example 424x240) and stretch it to fill the screen, so
 // each original pixel becomes a block of screen pixels. A PixelGrid (grid_detect.h) gives
 // that original resolution and the rectangle of the frame the stretched picture covers;
-// render() reads one frame pixel from the centre of each block (see capture.hlsl) and
-// gets the picture back at its original size, which is what RetroArch shaders expect.
+// render() reads one frame pixel from the centre of each block and gets the picture
+// back at its original size, which is what RetroArch shaders expect. That step is itself
+// a one-pass RetroArch preset, the capture preset (capture.h, capture.slang), run
+// through librashader like the user's preset.
 //
 // Owns the textures and shaders this needs and recreates textures when sizes or formats
 // change. Not thread-safe: calls must not overlap.
@@ -35,10 +37,10 @@ public:
     Renderer &operator=(const Renderer &) = delete;
     ~Renderer() { shutdown(); }
 
-    // Prepares the renderer to draw with `device`: creates the capture shaders (compiled
-    // from capture.hlsl at build time) and the small buffer that passes the grid to them.
-    // Releases anything from an earlier init() first. Returns false and sets `error` on
-    // failure. Must succeed before snapshot() or render() is called.
+    // Prepares the renderer to draw with `device`: loads the capture preset (capture.h).
+    // librashader must already be loaded (librashader_api.h). Releases anything from an
+    // earlier init() first. Returns false and sets `error` on failure. Must succeed
+    // before snapshot() or render() is called.
     bool init(ID3D11Device *device, std::string &error);
 
     // Releases every GPU object the renderer holds, returning it to its state before
@@ -98,29 +100,28 @@ private:
     // `format` (the format of the texture it will be copied into), recreating it when
     // either changed. Returns false and sets `error` if it cannot be created.
     bool ensure_output(int w, int h, DXGI_FORMAT format, std::string &error);
+    // Passes the grid's rectangle and native size to the capture preset as its parameters,
+    // when they differ from the last ones passed. Returns false and sets `error` on failure.
+    bool set_capture_grid(const PixelGrid &grid, std::string &error);
 
     // Device passed to init(). Not owned: the renderer holds no reference to it.
     ID3D11Device *device_ = nullptr;
-    // The two halves of the capture shader (capture.hlsl): a vertex shader that covers
-    // the render target with one triangle, and a pixel shader that picks one frame pixel
-    // per native pixel.
-    ID3D11VertexShader *vs_ = nullptr;
-    ID3D11PixelShader *ps_ = nullptr;
-    // Constant buffer (a small block of values shaders can read) holding the grid's
-    // rectangle and native size for the capture pixel shader.
-    ID3D11Buffer *cb_ = nullptr;
+    // The capture preset (capture.slangp), compiled for `device_`, and the grid whose
+    // values it was last given (see set_capture_grid).
+    ShaderChain capture_;
+    PixelGrid capture_grid_;
 
     // The snapshot: a copy of the frame. Created "typeless" (bytes per pixel fixed, but
     // their meaning, plain or sRGB, left to each view) so snap_srv_ can read it as plain
     // values even when the frame is sRGB. snap_srv_ (a shader resource view: how shaders
-    // read a texture) is what the capture shader reads. snap_desc_ describes the copy and
+    // read a texture) is what the capture preset reads. snap_desc_ describes the copy and
     // is compared with the next frame to decide when to recreate it.
     ID3D11Texture2D *snap_tex_ = nullptr;
     ID3D11ShaderResourceView *snap_srv_ = nullptr;
     D3D11_TEXTURE2D_DESC snap_desc_ = {};
     DXGI_FORMAT snap_format_ = DXGI_FORMAT_UNKNOWN; // the frame's format (the texture is typeless)
 
-    // The rebuilt native image. The capture shader draws into it through native_rtv_ (a
+    // The rebuilt native image. The capture preset draws into it through native_rtv_ (a
     // render target view: how the GPU draws into a texture); the shader chain reads it
     // through native_srv_. native_w_ x native_h_ is its size.
     ID3D11Texture2D *native_tex_ = nullptr;
