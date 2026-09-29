@@ -30,7 +30,6 @@ jobs:
         shell: cmd
         run: build.bat
 
-      # GPU tests (render_png, e2e.py) need a real GPU and ReShade, so they run locally.
       - name: Grid detection tests
         shell: bash
         run: |
@@ -45,6 +44,29 @@ jobs:
       - name: File handling tests
         shell: bash
         run: out/build/files_test.exe
+
+      # The add-on inside ReShade, on Vulkan with Mesa's software Vulkan driver and the
+      # Vulkan validation layer. Direct3D is only tested locally: ReShade does not run on
+      # Windows' software Direct3D devices, and this machine has no GPU (see README).
+      - name: Cache end-to-end test dependencies
+        uses: actions/cache@v4
+        with:
+          path: out/ci-deps
+          key: ci-deps-${{ hashFiles('tests/ci_deps.py', 'tools/package.py') }}
+
+      - name: Fetch end-to-end test dependencies
+        shell: bash
+        run: python tests/ci_deps.py out/ci-deps
+
+      - name: End-to-end test (Vulkan, software rendering)
+        shell: bash
+        run: |
+          export PATH="$PWD/out/ci-deps/vulkan-runtime:$PATH"
+          export VK_DRIVER_FILES="$(cygpath -w "$PWD/out/ci-deps/lavapipe/lvp_icd.x86_64.json")"
+          python tests/e2e.py --apis vulkan --reshade out/ci-deps/ReShade64.dll \
+            --librashader out/ci-deps/librashader.dll --shaders out/ci-deps/slang-shaders \
+            --preset crt/zfast-crt.slangp --native out/synthetic/native.png \
+            --vulkan-validation out/ci-deps/vulkan-sdk/Bin
 
       - name: Package
         shell: bash

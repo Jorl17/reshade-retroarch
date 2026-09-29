@@ -1,0 +1,158 @@
+"""Downloads what tests/e2e.py needs on a machine without a GPU (the CI), each at a fixed
+version and checked against its SHA-256.
+
+    python tests/ci_deps.py <folder>
+
+What ends up in <folder>:
+  ReShade64.dll                 ReShade 6.8.0 with add-on support, from its official setup
+  librashader.dll               librashader 0.12.0 (the version tools/package.py ships)
+  slang-shaders/                libretro's shader collection at a fixed commit; only
+                                crt/zfast-crt.slangp and its shaders are checked out
+  vulkan-runtime/vulkan-1.dll   the Vulkan loader (LunarG's Vulkan runtime)
+  lavapipe/                     Mesa's software Vulkan driver: vulkan_lvp.dll and
+                                lvp_icd.x86_64.json (point VK_DRIVER_FILES at the .json)
+  vulkan-sdk/Bin/               the Vulkan SDK's files, including the validation layer
+                                (copied only: the installer changes nothing on the system)
+  downloads/                    the downloaded files
+
+Anything already in place is not downloaded again. Needs git and 7z (7-Zip) on PATH.
+"""
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import urllib.request
+import zipfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+import package  # noqa: E402  (tools/package.py: the pinned librashader)
+
+RESHADE_URL = "https://reshade.me/downloads/ReShade_Setup_6.8.0_Addon.exe"
+RESHADE_DLL_SHA256 = "0cee63f9c9f13f3ac909c5b4903f4dbb4b719a7ab3b4f13b0deaf83c814b94f7"  # ReShade64.dll 6.8.0.2155
+
+SLANG_SHADERS_URL = "https://github.com/libretro/slang-shaders.git"
+SLANG_SHADERS_COMMIT = "84bcd19a854348c0e6a1d3db814a76f11fb6f011"
+SLANG_SHADERS_FOLDERS = ["crt/shaders/zfast_crt"]  # crt/zfast-crt.slangp comes with its parent folder
+
+VULKAN_VERSION = "1.4.363.0"
+VULKAN_RUNTIME_URL = (f"https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/windows/"
+                      f"VulkanRT-X64-{VULKAN_VERSION}-Components.zip")
+VULKAN_RUNTIME_SHA256 = "a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a"
+VULKAN_SDK_URL = (f"https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/windows/"
+                  f"vulkansdk-windows-X64-{VULKAN_VERSION}.exe")
+VULKAN_SDK_SHA256 = "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141"
+
+MESA_URL = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.3/mesa3d-26.2.3-release-msvc.7z"
+MESA_SHA256 = "3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
+
+
+def sha256(path):
+    """The SHA-256 of the file at `path`, in hexadecimal."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def download(url, folder, expected_sha256=None):
+    """Downloads `url` into `folder` (unless the file is already there) and returns its
+    path. Exits with an error if `expected_sha256` is given and the file does not match."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, url.rsplit("/", 1)[1])
+    if not os.path.exists(path):
+        print(f"downloading {url}", flush=True)
+        # Written to a ".part" file first, so a broken download never has the final name.
+        with urllib.request.urlopen(url) as r, open(path + ".part", "wb") as f:
+            shutil.copyfileobj(r, f)
+        os.replace(path + ".part", path)
+    if expected_sha256 and sha256(path) != expected_sha256:
+        sys.exit(f"{path}: SHA-256 {sha256(path)} does not match the pinned {expected_sha256}")
+    return path
+
+
+def reshade(out, downloads):
+    """ReShade64.dll, taken from the zip inside ReShade's setup program."""
+    dll = os.path.join(out, "ReShade64.dll")
+    if not os.path.exists(dll) or sha256(dll) != RESHADE_DLL_SHA256:
+        with zipfile.ZipFile(download(RESHADE_URL, downloads)) as z, open(dll, "wb") as f:
+            f.write(z.read("ReShade64.dll"))
+    if sha256(dll) != RESHADE_DLL_SHA256:
+        sys.exit(f"{dll}: SHA-256 {sha256(dll)} does not match the pinned {RESHADE_DLL_SHA256}")
+
+
+def librashader(out, downloads):
+    """librashader.dll, from the release tools/package.py uses (checked there)."""
+    with open(os.path.join(out, "librashader.dll"), "wb") as f:
+        f.write(package.fetch_librashader(downloads))
+
+
+def slang_shaders(out):
+    """A checkout of SLANG_SHADERS_FOLDERS at SLANG_SHADERS_COMMIT (other files are not
+    downloaded)."""
+    repo = os.path.join(out, "slang-shaders")
+
+    def git(*args):
+        subprocess.run(["git", "-C", repo, *args], check=True)
+
+    head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if head == SLANG_SHADERS_COMMIT:
+        return
+    shutil.rmtree(repo, ignore_errors=True)
+    subprocess.run(["git", "clone", "--filter=blob:none", "--no-checkout", "--sparse", SLANG_SHADERS_URL, repo],
+                   check=True)
+    git("sparse-checkout", "set", *SLANG_SHADERS_FOLDERS)
+    git("checkout", "--quiet", SLANG_SHADERS_COMMIT)
+
+
+def vulkan_runtime(out, downloads):
+    """vulkan-1.dll (64-bit) from LunarG's Vulkan runtime components."""
+    dll = os.path.join(out, "vulkan-runtime", "vulkan-1.dll")
+    if os.path.exists(dll):
+        return
+    with zipfile.ZipFile(download(VULKAN_RUNTIME_URL, downloads, VULKAN_RUNTIME_SHA256)) as z:
+        names = [n for n in z.namelist() if n.lower().endswith("vulkan-1.dll") and "64" in n]
+        if len(names) != 1:
+            sys.exit(f"expected one 64-bit vulkan-1.dll in the Vulkan runtime zip, found {names}")
+        os.makedirs(os.path.dirname(dll), exist_ok=True)
+        with open(dll, "wb") as f:
+            f.write(z.read(names[0]))
+
+
+def lavapipe(out, downloads):
+    """Mesa's software Vulkan driver (64-bit) from the mesa-dist-win release."""
+    folder = os.path.join(out, "lavapipe")
+    if os.path.exists(os.path.join(folder, "lvp_icd.x86_64.json")):
+        return
+    archive = download(MESA_URL, downloads, MESA_SHA256)
+    subprocess.run(["7z", "e", archive, f"-o{folder}", "x64/vulkan_lvp.dll", "x64/lvp_icd.x86_64.json", "-y"],
+                   check=True, stdout=subprocess.DEVNULL)
+
+
+def vulkan_sdk(out, downloads):
+    """The Vulkan SDK's files, copied with the installer's copy_only=1 option."""
+    folder = os.path.join(out, "vulkan-sdk")
+    if os.path.exists(os.path.join(folder, "Bin", "VkLayer_khronos_validation.json")):
+        return
+    installer = download(VULKAN_SDK_URL, downloads, VULKAN_SDK_SHA256)
+    subprocess.run([installer, "--root", os.path.abspath(folder), "--accept-licenses", "--default-answer",
+                    "--confirm-command", "install", "copy_only=1"], check=True)
+
+
+def main():
+    """Fetches everything listed at the top of the file into the folder given."""
+    out = os.path.abspath(sys.argv[1])
+    downloads = os.path.join(out, "downloads")
+    os.makedirs(out, exist_ok=True)
+    reshade(out, downloads)
+    librashader(out, downloads)
+    slang_shaders(out)
+    vulkan_runtime(out, downloads)
+    lavapipe(out, downloads)
+    vulkan_sdk(out, downloads)
+    print(f"test dependencies ready in {out}")
+
+
+if __name__ == "__main__":
+    main()

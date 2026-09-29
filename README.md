@@ -164,8 +164,21 @@ fetches the pinned `librashader.dll`.
 | `out/build/detect_test --rules` | Which detections may replace the grid in use. |
 | `python tests/host_selftest.py` | The test host (a stand-in game for D3D9/10/11/12, OpenGL and Vulkan) shows its pictures byte for byte on every API and format. |
 | `out/build/files_test`, `out/build/params_test` | Preset files, discovery, saving parameters. |
-| `python tests/e2e.py ...` | The add-on inside real ReShade (needs a GPU). |
+| `python tests/e2e.py ...` | The add-on inside real ReShade, on each graphics API. |
 | `python tests/compat_sweep.py ...` | Loads every preset in a shader folder. |
+
+### What CI runs
+
+CI (GitHub Actions) runs everything above except the Direct3D end-to-end tests: it runs
+`tests/e2e.py` on Vulkan only, with Mesa's software Vulkan driver, because CI machines
+have no GPU and ReShade does not run on Windows' software Direct3D. Run the Direct3D
+end-to-end tests on a PC with a GPU before a release:
+
+```
+python tests/e2e.py --reshade <ReShade64.dll> --librashader <librashader.dll> --shaders <slang-shaders> --preset <preset> --native <native.png>
+```
+
+`tests/ci_deps.py <folder>` downloads what CI uses (pinned versions).
 
 ### Vulkan validation layer
 
