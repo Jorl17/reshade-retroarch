@@ -99,7 +99,7 @@ bool Renderer::init(ID3D11Device *device, std::string &error)
 {
     shutdown();
     device_ = device;
-    const std::string preset = capture_preset_path(error);
+    const std::string preset = capture_preset_path(false, error);
     if (preset.empty() || !capture_.create(ChainDevice{GraphicsApi::d3d11, reinterpret_cast<uint64_t>(device)}, preset, error))
     {
         error = "could not load the capture shader: " + error;

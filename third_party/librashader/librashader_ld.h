@@ -1564,8 +1564,9 @@ static inline libra_instance_t __librashader_make_null_instance(void) {
 #if defined(LIBRA_RUNTIME_D3D9)
     instance.d3d9_filter_chain_create =
         __librashader__noop_d3d9_filter_chain_create;
-    instance.d3d9_filter_chain_create_deferred =
-        __librashader__noop_d3d9_filter_chain_create_deferred;
+    // reshade-retroarch patch: upstream (0.12.0 and master) assigns a
+    // d3d9_filter_chain_create_deferred member that libra_instance_t does not have (Direct3D 9
+    // has no deferred creation), which does not compile; the assignment is removed.
     instance.d3d9_filter_chain_frame =
         __librashader__noop_d3d9_filter_chain_frame;
     instance.d3d9_filter_chain_free =

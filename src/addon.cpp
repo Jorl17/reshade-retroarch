@@ -402,6 +402,16 @@ void on_destroy_effect_runtime(effect_runtime *runtime)
         return;
     rd->detector.shutdown(runtime->get_device());
     rd->detect_pending = false;
+    // Direct3D 9 resets its device when the swap chain is resized, which fails while any
+    // video-memory texture exists: release the renderer's textures and both compiled
+    // presets (librashader's hold textures too). They are recreated on the next frame.
+    if (runtime->get_device()->get_api() == device_api::d3d9)
+    {
+        rd->renderer.shutdown();
+        rd->renderer_ready = false;
+        rd->chain.destroy();
+        rd->chain_source.clear(); // makes prepare() compile the companion again
+    }
 }
 
 // ReShade event: ReShade reloaded all its effect files. Restarts the grace period before the
@@ -635,6 +645,15 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
         grid.native_w = g_settings.mode == native_manual ? std::max(1, g_settings.manual_w) : int(desc.texture.width);
         grid.native_h = g_settings.mode == native_manual ? std::max(1, g_settings.manual_h) : int(desc.texture.height);
         grid.match = 1.0f;
+    }
+
+    // Right after the frame size changes, the detector's grid is still for the old size until
+    // its next tick (in on_reshade_present) rescales it: leave this one frame untouched.
+    if (grid.rect_x < 0 || grid.rect_y < 0 || uint32_t(grid.rect_x + grid.rect_w) > desc.texture.width ||
+        uint32_t(grid.rect_y + grid.rect_h) > desc.texture.height)
+    {
+        rd->status = "Waiting: adapting to the new frame size";
+        return;
     }
 
     // Extract the low resolution picture, run the preset on it and write the result over the

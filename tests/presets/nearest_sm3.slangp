@@ -1,0 +1,6 @@
+# Direct3D 9 version of nearest.slangp (see nearest_sm3.slang).
+shaders = 1
+shader0 = "nearest_sm3.slang"
+filter_linear0 = false
+scale_type0 = viewport
+scale0 = 1.0

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <d3d9.h>
 #include <d3d11.h>
 #include <d3d12.h>
 #include <string>
 
 // The librashader runtimes (one per graphics API) whose functions this project calls.
+#define LIBRA_RUNTIME_D3D9
 #define LIBRA_RUNTIME_D3D11
 #define LIBRA_RUNTIME_D3D12
 #define LIBRA_RUNTIME_OPENGL

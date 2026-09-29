@@ -89,7 +89,8 @@ std::vector<std::pair<std::string, float>> param_overrides(const std::vector<Sha
 
 bool ShaderChain::supports(GraphicsApi api)
 {
-    return api == GraphicsApi::d3d11 || api == GraphicsApi::d3d12 || api == GraphicsApi::opengl;
+    return api == GraphicsApi::d3d9 || api == GraphicsApi::d3d11 || api == GraphicsApi::d3d12 ||
+           api == GraphicsApi::opengl;
 }
 
 // Finds an OpenGL function for librashader: wglGetProcAddress knows the functions added
@@ -207,6 +208,15 @@ bool ShaderChain::create(const ChainDevice &device, const std::string &preset_pa
         chain = c;
         break;
     }
+    case GraphicsApi::d3d9:
+    {
+        filter_chain_d3d9_opt_t opt = {};
+        opt.version = LIBRASHADER_CURRENT_VERSION;
+        libra_d3d9_filter_chain_t c = nullptr;
+        err = api.d3d9_filter_chain_create(&preset, reinterpret_cast<IDirect3DDevice9 *>(device.device), &opt, &c);
+        chain = c;
+        break;
+    }
     case GraphicsApi::opengl:
     {
         // Needs the OpenGL context to be current on this thread.
@@ -257,6 +267,12 @@ void ShaderChain::destroy()
         {
             libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(chain_);
             libra::api().gl_filter_chain_free(&chain);
+            break;
+        }
+        case GraphicsApi::d3d9:
+        {
+            libra_d3d9_filter_chain_t chain = static_cast<libra_d3d9_filter_chain_t>(chain_);
+            libra::api().d3d9_filter_chain_free(&chain);
             break;
         }
         default:
@@ -323,6 +339,16 @@ bool ShaderChain::frame(uint64_t commands, const ChainImage &input, const ChainI
         err = libra::api().gl_filter_chain_frame(&chain, size_t(frame_count), in, out, &viewport, nullptr, &opt);
         break;
     }
+    case GraphicsApi::d3d9:
+    {
+        const frame_d3d9_opt_t opt = frame_options<frame_d3d9_opt_t>();
+        libra_d3d9_filter_chain_t chain = static_cast<libra_d3d9_filter_chain_t>(chain_);
+        err = libra::api().d3d9_filter_chain_frame(&chain, size_t(frame_count),
+                                                   reinterpret_cast<IDirect3DTexture9 *>(input.resource),
+                                                   reinterpret_cast<IDirect3DSurface9 *>(output.view), &viewport,
+                                                   nullptr, &opt);
+        break;
+    }
     default:
         error = std::string(api_name(api_)) + " is not supported yet";
         return false;
@@ -361,6 +387,12 @@ bool ShaderChain::set_param(const std::string &name, float value, std::string &e
     {
         libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(chain_);
         err = libra::api().gl_filter_chain_set_param(&chain, name.c_str(), value);
+        break;
+    }
+    case GraphicsApi::d3d9:
+    {
+        libra_d3d9_filter_chain_t chain = static_cast<libra_d3d9_filter_chain_t>(chain_);
+        err = libra::api().d3d9_filter_chain_set_param(&chain, name.c_str(), value);
         break;
     }
     default:

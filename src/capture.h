@@ -6,9 +6,11 @@
 
 #include <string>
 
-// Returns the path (UTF-8) of capture.slangp, ready for librashader to load. Both files
-// are built into the program; librashader only loads presets from files, so the first
-// call writes them into a folder under the user's temporary directory (named after
-// their content, so different versions never mix) and later calls return the same
-// path. Returns an empty string and sets `error` if the files cannot be written.
-std::string capture_preset_path(std::string &error);
+// Returns the path (UTF-8) of the capture preset, ready for librashader to load: the one
+// using capture_sm3.slang (for Direct3D 9, whose Shader Model 3 has no integer maths)
+// when `shader_model_3` is set, else the one using capture.slang. The files are built into
+// the program; librashader only loads presets from files, so the first call writes them
+// into a folder under the user's temporary directory (named after their content, so
+// different versions never mix) and later calls return the same path. Returns an empty
+// string and sets `error` if the files cannot be written.
+std::string capture_preset_path(bool shader_model_3, std::string &error);

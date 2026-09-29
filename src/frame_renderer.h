@@ -94,6 +94,12 @@ private:
     // Passes the grid's rectangle and native size to the capture preset as its parameters,
     // when they differ from the last ones passed. Returns false and sets `error` on failure.
     bool set_capture_grid(const PixelGrid &grid, std::string &error);
+    // Format for the renderer's copies of a frame of format `frame_format`: its typeless
+    // family where the API has typeless formats, the frame's own format on Direct3D 9.
+    reshade::api::format copy_format(reshade::api::format frame_format) const;
+    // Format of the native picture: 8-bit RGBA, or BGRA on Direct3D 9, where RGBA textures
+    // usually cannot be drawn into.
+    reshade::api::format native_format() const;
     // Destroy one texture and its views (any of which may be {0}) and set them to {0}.
     void destroy(reshade::api::resource &res, reshade::api::resource_view &view1, reshade::api::resource_view &view2);
 

@@ -15,6 +15,9 @@ repository they sit next to each component in `third_party/`.
   https://github.com/SnowflakePowered/librashader/releases/tag/librashader-v0.12.0.
 - `third_party/librashader/librashader.h` and `librashader_ld.h` (C API headers, used at
   build time): **MIT**, Copyright 2022 chyyran. The licence text is at the top of each header.
+  `librashader_ld.h` is patched: it assigns a Direct3D 9 function that does not exist,
+  which does not compile when Direct3D 9 support is enabled; the two lines are removed
+  (marked "reshade-retroarch patch" in the file).
 
 The add-on loads `librashader.dll` at run time through `librashader_ld.h`, as the librashader
 README recommends for projects that are not MPL-2.0 themselves. You may replace

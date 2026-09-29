@@ -71,6 +71,8 @@ struct ChainDevice
 //    a pixel-shader-resource state and the output in the render-target state.
 //  - OpenGL: `resource` (the texture's name, a GLuint), `format` (its sized internal
 //    format, e.g. GL_RGBA8), `width` and `height`, for input and output alike.
+//  - Direct3D 9: `resource` for the input (an IDirect3DTexture9*), `view` for the output
+//    (the IDirect3DSurface9* to draw into).
 // (Other APIs are added with their support.)
 struct ChainImage
 {
@@ -113,9 +115,9 @@ public:
     // (noise, flicker, interlacing) use it, so it should go up by one each frame. The work
     // is recorded on `commands`, the API's native command recorder: an
     // ID3D11DeviceContext* on Direct3D 11, an open ID3D12GraphicsCommandList* on
-    // Direct3D 12 (librashader binds its own descriptor heaps on it); unused on OpenGL,
-    // which draws with the context current on the calling thread (the one the chain was
-    // created with). Returns false and sets `error` if no preset is loaded or librashader
+    // Direct3D 12 (librashader binds its own descriptor heaps on it); unused on OpenGL and
+    // Direct3D 9 (which draws on the device given to create()). On OpenGL,
+    // the context current on the calling thread is used (the one the chain was created with). Returns false and sets `error` if no preset is loaded or librashader
     // reports an error.
     // Do not rely on the rest of `output` being kept: librashader clears all of it.
     bool frame(uint64_t commands, const ChainImage &input, const ChainImage &output, int x, int y, int w, int h,

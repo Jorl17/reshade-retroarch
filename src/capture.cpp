@@ -44,15 +44,19 @@ bool write_if_different(const fs::path &path, const std::string &text)
 }
 }
 
-std::string capture_preset_path(std::string &error)
+std::string capture_preset_path(bool shader_model_3, std::string &error)
 {
     static std::mutex mutex;
-    static std::string cached;
+    static std::string cached[2];
     std::lock_guard<std::mutex> lock(mutex);
-    if (!cached.empty())
-        return cached;
+    if (!cached[shader_model_3].empty())
+        return cached[shader_model_3];
 
-    const std::string slang = kCaptureSlang, slangp = kCaptureSlangp;
+    const std::string slang = shader_model_3 ? kCaptureSm3Slang : kCaptureSlang;
+    // The Shader Model 3 preset is the same preset pointing at the other shader file.
+    std::string slangp = kCaptureSlangp;
+    if (shader_model_3)
+        slangp.replace(slangp.find("\"capture.slang\""), 15, "\"capture_sm3.slang\"");
     wchar_t tmp[MAX_PATH] = {};
     if (GetTempPathW(MAX_PATH, tmp) == 0)
     {
@@ -64,11 +68,12 @@ std::string capture_preset_path(std::string &error)
     const fs::path dir = fs::path(tmp) / (L"reshade-retroarch-capture-" + std::to_wstring(hash));
     std::error_code ec;
     fs::create_directories(dir, ec);
-    if (!write_if_different(dir / L"capture.slang", slang) || !write_if_different(dir / L"capture.slangp", slangp))
+    const wchar_t *const shader_name = shader_model_3 ? L"capture_sm3.slang" : L"capture.slang";
+    if (!write_if_different(dir / shader_name, slang) || !write_if_different(dir / L"capture.slangp", slangp))
     {
         error = "could not write the capture shader to " + utf8_from_path(dir);
         return {};
     }
-    cached = utf8_from_path(dir / L"capture.slangp");
-    return cached;
+    cached[shader_model_3] = utf8_from_path(dir / L"capture.slangp");
+    return cached[shader_model_3];
 }

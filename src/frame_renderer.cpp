@@ -124,7 +124,7 @@ bool FrameRenderer::init(device *dev, std::string &error)
     if (!chain_device(dev, chain_device_, error))
         return false;
     device_ = dev;
-    const std::string preset = capture_preset_path(error);
+    const std::string preset = capture_preset_path(chain_device_.api == GraphicsApi::d3d9, error);
     if (preset.empty() || !capture_.create(chain_device_, preset, error))
     {
         error = "could not load the capture shader: " + error;
@@ -180,20 +180,33 @@ ChainImage FrameRenderer::chain_image(resource res, resource_view view, format f
             gl_format = 0x8059; // GL_RGB10_A2
         return ChainImage{view.handle & 0xFFFFFFFF, view.handle, gl_format, width, height};
     }
-    // Direct3D 11 takes views; Direct3D 12 the resource, a descriptor and the format.
+    // Direct3D 11 takes views; Direct3D 12 the resource, a descriptor and the format;
+    // Direct3D 9 the input texture and the output's render target surface (the view).
     return ChainImage{res.handle, view.handle, uint32_t(fmt), width, height};
+}
+
+format FrameRenderer::copy_format(format frame_format) const
+{
+    return chain_device_.api == GraphicsApi::d3d9 ? format_to_default_typed(frame_format, 0)
+                                                  : format_to_typeless(frame_format);
+}
+
+format FrameRenderer::native_format() const
+{
+    return chain_device_.api == GraphicsApi::d3d9 ? format::b8g8r8a8_unorm : format::r8g8b8a8_unorm;
 }
 
 // The snapshot is created typeless (only the bytes per pixel fixed, their meaning left to
 // each view) so it can be read as plain values even when the frame is sRGB; copies
-// between a typed and a typeless texture of the same family are allowed.
+// between a typed and a typeless texture of the same family are allowed. Direct3D 9 has
+// no typeless formats (and handles sRGB elsewhere), so there it has the frame's format.
 bool FrameRenderer::ensure_snapshot(const resource_desc &frame, std::string &error)
 {
     if (snap_.handle != 0 && snap_w_ == frame.texture.width && snap_h_ == frame.texture.height &&
         snap_format_ == frame.texture.format)
         return true;
     destroy(snap_, snap_srv_, snap_unused_);
-    const resource_desc desc(frame.texture.width, frame.texture.height, 1, 1, format_to_typeless(frame.texture.format), 1,
+    const resource_desc desc(frame.texture.width, frame.texture.height, 1, 1, copy_format(frame.texture.format), 1,
                              memory_heap::default_, resource_usage::shader_resource | resource_usage::copy_dest);
     if (!device_->create_resource(desc, nullptr, resource_usage::shader_resource, &snap_) ||
         !device_->create_resource_view(snap_, resource_usage::shader_resource,
@@ -214,13 +227,13 @@ bool FrameRenderer::ensure_native(uint32_t w, uint32_t h, std::string &error)
     if (native_.handle != 0 && native_w_ == w && native_h_ == h)
         return true;
     destroy(native_, native_rtv_, native_srv_);
-    const resource_desc desc(w, h, 1, 1, format::r8g8b8a8_unorm, 1, memory_heap::default_,
+    const resource_desc desc(w, h, 1, 1, native_format(), 1, memory_heap::default_,
                              resource_usage::render_target | resource_usage::shader_resource);
     if (!device_->create_resource(desc, nullptr, resource_usage::shader_resource, &native_) ||
         !device_->create_resource_view(native_, resource_usage::render_target,
-                                       resource_view_desc(format::r8g8b8a8_unorm), &native_rtv_) ||
+                                       resource_view_desc(native_format()), &native_rtv_) ||
         !device_->create_resource_view(native_, resource_usage::shader_resource,
-                                       resource_view_desc(format::r8g8b8a8_unorm), &native_srv_))
+                                       resource_view_desc(native_format()), &native_srv_))
     {
         destroy(native_, native_rtv_, native_srv_);
         error = "could not create the native image texture";
@@ -238,7 +251,7 @@ bool FrameRenderer::ensure_output(uint32_t w, uint32_t h, format frame_format, s
     if (out_.handle != 0 && out_w_ == w && out_h_ == h && out_format_ == frame_format)
         return true;
     destroy(out_, out_rtv_, out_unused_);
-    const resource_desc desc(w, h, 1, 1, format_to_typeless(frame_format), 1, memory_heap::default_,
+    const resource_desc desc(w, h, 1, 1, copy_format(frame_format), 1, memory_heap::default_,
                              resource_usage::render_target | resource_usage::copy_source);
     if (!device_->create_resource(desc, nullptr, resource_usage::copy_source, &out_) ||
         !device_->create_resource_view(out_, resource_usage::render_target,
@@ -395,14 +408,14 @@ bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelG
     // pixel at the centre of that pixel's block (capture.slang).
     bool ok = capture_.frame(commands,
                              chain_image(snap_, snap_srv_, format_to_default_typed(snap_format_, 0), snap_w_, snap_h_),
-                             chain_image(native_, native_rtv_, format::r8g8b8a8_unorm, nw, nh), 0, 0, int(nw), int(nh),
+                             chain_image(native_, native_rtv_, native_format(), nw, nh), 0, 0, int(nw), int(nh),
                              frame_count, error);
     transition(commands, native_, resource_usage::render_target, resource_usage::shader_resource);
 
     // Step 2: run the user's preset on the native picture, into out_, which is exactly the
     // size of the rectangle (librashader clears its whole output, so drawing straight into
     // the frame would erase what surrounds the game picture).
-    ok = ok && chain.frame(commands, chain_image(native_, native_srv_, format::r8g8b8a8_unorm, nw, nh),
+    ok = ok && chain.frame(commands, chain_image(native_, native_srv_, native_format(), nw, nh),
                            chain_image(out_, out_rtv_, format_to_default_typed(dst_format, 0), rw, rh), 0, 0, int(rw),
                            int(rh), frame_count, error);
     transition(commands, out_, resource_usage::render_target, resource_usage::copy_source);

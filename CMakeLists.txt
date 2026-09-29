@@ -17,9 +17,11 @@ add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 set(GEN ${CMAKE_BINARY_DIR}/generated)
 file(READ ${CMAKE_SOURCE_DIR}/src/capture.slang CAPTURE_SLANG)
 file(READ ${CMAKE_SOURCE_DIR}/src/capture.slangp CAPTURE_SLANGP)
+file(READ ${CMAKE_SOURCE_DIR}/src/capture_sm3.slang CAPTURE_SM3_SLANG)
 configure_file(${CMAKE_SOURCE_DIR}/src/capture_slang.h.in ${GEN}/capture_slang.h @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-             ${CMAKE_SOURCE_DIR}/src/capture.slang ${CMAKE_SOURCE_DIR}/src/capture.slangp)
+             ${CMAKE_SOURCE_DIR}/src/capture.slang ${CMAKE_SOURCE_DIR}/src/capture.slangp
+             ${CMAKE_SOURCE_DIR}/src/capture_sm3.slang)
 
 # Everything that is not ReShade specific; shared by the add-on and the tools.
 add_library(rra_core STATIC

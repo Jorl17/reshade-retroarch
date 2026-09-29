@@ -51,7 +51,7 @@ import make_synthetic as ms  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]
 # APIs the add-on renders on. On the others it must leave frames untouched and say why.
-SUPPORTED = {"d3d11", "d3d12", "opengl"}
+SUPPORTED = {"d3d9", "d3d11", "d3d12", "opengl"}
 # What ReShade.log must say on an API the add-on does not support.
 API_NAMES = {"d3d9": "Direct3D 9", "d3d10": "Direct3D 10", "d3d11": "Direct3D 11", "d3d12": "Direct3D 12",
              "opengl": "OpenGL", "vulkan": "Vulkan"}
@@ -166,7 +166,10 @@ def install(args, api, work, common):
         with open(os.path.join(work, "presets", name + ".ini"), "w") as f:
             f.write("Techniques=\nTechniqueSorting=\n")
     shutil.copy(os.path.join(common, "A.slangp"), os.path.join(work, "presets", "A.slangp"))
-    shutil.copy(os.path.join(common, "N.slangp"), os.path.join(work, "presets", "N.slangp"))
+    # Direct3D 9 gets the Shader Model 3 version of the exact test shader.
+    nearest = "nearest_sm3.slangp" if api == "d3d9" else "nearest.slangp"
+    with open(os.path.join(work, "presets", "N.slangp"), "w") as f:
+        f.write('#reference "{}"\n'.format(os.path.join(REPO, "tests", "presets", nearest).replace("\\", "/")))
     with open(os.path.join(work, "ReShade.ini"), "w") as f:
         f.write("[GENERAL]\nEffectSearchPaths=.\\reshade-shaders\\Shaders\\**\n"
                 "PresetPath=.\\presets\\A.ini\nSkipLoadingDisabledEffects=0\n\n[OVERLAY]\nTutorialProgress=4\n")

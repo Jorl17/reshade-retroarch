@@ -125,8 +125,12 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 
 ## Limitations
 
-- Direct3D 11, Direct3D 12 and OpenGL. Vulkan and Direct3D 9 are not supported yet;
-  Direct3D 10 cannot be (librashader has no Direct3D 10 support).
+- Direct3D 11, Direct3D 12 and OpenGL. Vulkan is not supported yet. Direct3D 10 cannot be
+  (librashader has no Direct3D 10 support).
+- Direct3D 9 is experimental: the add-on works, but librashader's Direct3D 9 support is
+  limited to shaders that fit Direct3D 9's old shader model, and the CRT presets tried so
+  far (crt-royale, crt-geom, zfast-crt) do not run on it; the picture is then left
+  untouched and the window shows librashader's error.
 - Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
 - No HDR content (see FAQ).
 - Automatic detection needs sharp pixels. For smoothly upscaled games, use **Fixed**.
