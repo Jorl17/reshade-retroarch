@@ -1,7 +1,7 @@
 # RetroArch Shaders for ReShade
 
 A ReShade add-on that runs **unmodified RetroArch shader presets** (`.slangp`) on
-Direct3D 11, Direct3D 12, OpenGL and Vulkan games, through
+Direct3D 11, Direct3D 12, OpenGL and Vulkan games (Direct3D 9: experimental), through
 [librashader](https://github.com/SnowflakePowered/librashader).
 
 Re-releases of old games usually scale a low-resolution picture up to your screen. A CRT
@@ -12,8 +12,11 @@ as HD side art, are left alone.
 
 ## Install
 
-1. Install [ReShade](https://reshade.me) **with full add-on support** for the game.
-2. Extract the release zip into the game's folder, next to its `.exe`.
+1. Install [ReShade](https://reshade.me) **with full add-on support** for the game
+   (tested with ReShade 6.8.0).
+2. Download `RetroArchShaders-<version>.zip` from
+   [Releases](https://github.com/Jorl17/reshade-retroarch/releases) and extract it into
+   the game's folder, next to its `.exe`.
 3. Put shaders in `retroarch-shaders\`, for example the
    [libretro slang-shaders](https://github.com/libretro/slang-shaders). An installed
    RetroArch (default folder, `%APPDATA%\RetroArch` or Steam) is found automatically.

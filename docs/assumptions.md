@@ -65,8 +65,8 @@ which is the usual case.
 - **Where:** `FrameRenderer::begin_librashader`, `GridDetector::tick`.
 - **Guard: documented only.** A game that finishes its picture on another queue (some
   recent games present from a compute queue) could have its frame read before it is
-  complete. The proper fix needs ReShade: a way to submit with the present's
-  synchronisation (see the ReShade requests in `BACKLOG.md`, not in the repository).
+  complete. The proper fix needs ReShade: a way for add-ons to submit work with the
+  present's synchronisation.
 
 ### Direct3D 9: effects are rendered inside a scene
 ReShade 6.8 calls `BeginScene` before rendering effects and `EndScene` after
@@ -157,7 +157,7 @@ another instance's physical device with the game's device is outside the Vulkan
 specification.
 - **Where:** `vulkan_handles` (`src/vulkan_support.cpp`).
 - **Guard: checked at run time** (no GPU with that LUID: refuses with a message) **and
-  tested.** Proper fix: ReShade exposing both handles (request drafted in `BACKLOG.md`).
+  tested.** Proper fix: ReShade giving add-ons both handles.
 
 ### The game's queue family, found from its capabilities
 Command pools must be created for the queue's family, which ReShade does not report. The

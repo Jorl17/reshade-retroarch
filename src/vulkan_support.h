@@ -8,8 +8,8 @@
 //    a Vulkan instance of its own and picks, in it, the physical device that is the same GPU
 //    as the game's (same LUID, the GPU's locally unique identifier, which ReShade does report).
 //    Those queries then return the same answers as for the game's own objects. Mixing objects
-//    of two instances is outside the Vulkan specification, so this is a workaround; see
-//    BACKLOG.md (not in the repository) for the proper fix, which needs ReShade.
+//    of two instances is outside the Vulkan specification, so this is a workaround. The
+//    proper fix needs ReShade to give add-ons the game's instance and physical device.
 // 2. The queue family of the game's queue, which command pools must be created for. ReShade
 //    does not report it either; it is found from the queue's capabilities (see
 //    vulkan_handles()).
