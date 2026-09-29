@@ -23,14 +23,18 @@ Separate runs: 7. 10-bit back buffer, 8. HDR10 output, 10. sRGB back buffer, and
 On Direct3D 12 also 11: DirectX's shader compiler missing (untouched, no crash).
 
 Exact runs (E1-E3), on supported APIs: the same frames with tests/presets/nearest.slangp,
-a shader whose output is the same bytes on every API. They must equal the offline render
-exactly, which proves the add-on's own work (frame copy, native picture, write-back) is
-exact on that API, whatever differences librashader's runtimes have with other presets.
+a shader that enlarges the picture and inverts its colours in exact arithmetic, so its
+output is the same bytes on every graphics API and never equals an untouched frame. They
+must equal the offline render exactly, which proves the add-on's own work (frame copy,
+native picture, write-back) is exact on that API, whatever differences librashader's
+runtimes have with other presets.
 
 "The shader's output" means: within rounding (see ROUNDING_MEAN) of an offline render of
-the same frame through the same code (tools/render_png.exe, Direct3D 11) on APIs the
-add-on supports. On APIs it does not support yet, every frame must be left untouched and
-ReShade.log must say why.
+the same frame through the same code (tools/render_png.exe) on APIs the add-on supports.
+The offline render uses Direct3D 12 for the Direct3D 12 run (librashader's Direct3D 12
+runtime renders some presets differently from its Direct3D 11 one) and Direct3D 11 for
+the others (render_png cannot render with them). On APIs the add-on does not support yet,
+every frame must be left untouched and ReShade.log must say why.
 
 The only effect file installed is the placeholder RetroArchShaders.fx, which also
 checks that the add-on runs when no other ReShade effects are present.
@@ -140,13 +144,19 @@ def prepare_common(args, common):
     for f in ["render_png.exe"]:
         shutil.copy(os.path.join(args.build, f), common)
     shutil.copy(args.librashader, os.path.join(common, "librashader.dll"))
-    for companion, prefix in [("A.slangp", "exp_"), ("N.slangp", "exact_")]:
+    # Offline renders: exp_/exact_ on Direct3D 11, and exp12_/exact12_ on Direct3D 12 for the
+    # Direct3D 12 run (needs the DirectX Shader Compiler).
+    renders = [("A.slangp", "exp_", []), ("N.slangp", "exact_", [])]
+    if "d3d12" in args.apis.split(",") and args.dxc:
+        renders += [("A.slangp", "exp12_", ["--api", "d3d12", "--dxc", args.dxc]),
+                    ("N.slangp", "exact12_", ["--api", "d3d12", "--dxc", args.dxc])]
+    for companion, prefix, extra in renders:
         for name in frames:
             r = subprocess.run([os.path.join(common, "render_png.exe"), os.path.join(common, companion),
-                                os.path.join(common, name + ".png"), os.path.join(common, prefix + name + ".png")],
-                               capture_output=True, text=True, cwd=common)
+                                os.path.join(common, name + ".png"), os.path.join(common, prefix + name + ".png"),
+                                *extra], capture_output=True, text=True, cwd=common)
             if r.returncode != 0:
-                sys.exit(f"offline render of {name} with {companion} failed:\n{r.stdout}{r.stderr}")
+                sys.exit(f"offline render of {name} with {companion} {extra} failed:\n{r.stdout}{r.stderr}")
     return list(frames)
 
 
@@ -200,6 +210,13 @@ def run_api(args, api, work, common, results):
     def c(*p):
         return os.path.join(common, *p)
 
+    def expected(name):
+        """The offline render `name` (exp_... or exact_...) for this API: its Direct3D 12
+        version on Direct3D 12, the Direct3D 11 one elsewhere."""
+        if api == "d3d12":
+            name = name.replace("exp_", "exp12_", 1).replace("exact_", "exact12_", 1)
+        return c(name)
+
     def host(frames, script, *host_args):
         env = dict(os.environ, RRA_TEST_SCRIPT=script, **env_extra)
         r = subprocess.run([w("test_host.exe"), "--api", api, "--frames", str(frames), *host_args],
@@ -248,16 +265,16 @@ def run_api(args, api, work, common, results):
         add(False, "main scenario", f"test host exit {code}: {err[:200]}")
         return
     shutil.copy(w("ReShade.log"), w("ReShade-run1.log"))
-    check("1 companion present, 4K       ", w("shots", "1.png"), c("exp_full4k.png"), c("full4k.png"))
+    check("1 companion present, 4K       ", w("shots", "1.png"), expected("exp_full4k.png"), c("full4k.png"))
     check("2 no companion                ", w("shots", "2.png"), c("full4k.png"), c("full4k.png"), exact=True)
     check("3 other preset, no companion  ", w("shots", "3.png"), c("full4k.png"), c("full4k.png"), exact=True)
-    check("4 .slangp dropped in          ", w("shots", "4.png"), c("exp_full4k.png"), c("full4k.png"))
-    check("5 4:3 pillarbox, HD side art  ", w("shots", "5.png"), c("exp_pillar4k.png"), c("pillar4k.png"))
+    check("4 .slangp dropped in          ", w("shots", "4.png"), expected("exp_full4k.png"), c("full4k.png"))
+    check("5 4:3 pillarbox, HD side art  ", w("shots", "5.png"), expected("exp_pillar4k.png"), c("pillar4k.png"))
     if os.path.exists(w("shots", "5.png")):
         s, src = load(w("shots", "5.png")), load(c("pillar4k.png"))
         ok = bool((s[:, :480] == src[:, :480]).all() and (s[:, 3360:] == src[:, 3360:]).all())
         add(ok, "5 pillarbox side art untouched", "exact" if ok else "changed")
-    check("6 resized to 1080p            ", w("shots", "6.png"), c("exp_full1080.png"), c("full1080.png"))
+    check("6 resized to 1080p            ", w("shots", "6.png"), expected("exp_full1080.png"), c("full1080.png"))
     if not supported:
         reason = f"{API_NAMES[api]} is not supported"
         add(log_has(reason), "  reason in ReShade.log        ", reason)
@@ -280,7 +297,8 @@ def run_api(args, api, work, common, results):
     if code == 3:
         na("7 10-bit back buffer          ", f"the host cannot draw it: {err}")
     else:
-        close("7 10-bit back buffer          ", w("shots", "7.png"), c("exp_full4k.png") if supported else c("full4k.png"))
+        close("7 10-bit back buffer          ", w("shots", "7.png"),
+              expected("exp_full4k.png") if supported else c("full4k.png"))
 
     code, err = host(300, f"250:shot={w('shots', '8.png')}", "--format", "rgb10a2", "--hdr10", "1",
                      "--image", "0:" + c("full4k.png"))
@@ -295,7 +313,7 @@ def run_api(args, api, work, common, results):
     if code == 3:
         na("10 sRGB back buffer           ", f"the host cannot draw it: {err}")
     else:
-        check("10 sRGB back buffer           ", w("shots", "10.png"), c("exp_full4k.png"), c("full4k.png"))
+        check("10 sRGB back buffer           ", w("shots", "10.png"), expected("exp_full4k.png"), c("full4k.png"))
 
     if api == "d3d12" and supported:
         # Without DirectX's shader compiler: untouched, reason logged, and no crash.
@@ -307,6 +325,10 @@ def run_api(args, api, work, common, results):
         if code == 0:
             check("11 no DirectX shader compiler  ", w("shots", "11.png"), c("full4k.png"), c("full4k.png"), exact=True)
             add(log_has("needs dxcompiler.dll"), "11 reason in ReShade.log       ", "needs dxcompiler.dll")
+        # Put the compiler back for the runs below.
+        if args.dxc:
+            for dll in ["dxcompiler.dll", "dxil.dll"]:
+                shutil.copy(os.path.join(args.dxc, dll), work)
 
     if supported:
         # Exact runs with the nearest-neighbour preset (see the top of this file).
@@ -317,13 +339,12 @@ def run_api(args, api, work, common, results):
         if code != 0:
             add(False, "E exact runs                  ", f"test host exit {code}: {err[:200]}")
         else:
-            check("E1 exact: 4K                   ", w("shots", "E1.png"), c("exact_full4k.png"), None, exact=True)
-            check("E2 exact: pillarbox, side art  ", w("shots", "E2.png"), c("exact_pillar4k.png"), None, exact=True)
-            check("E3 exact: 1080p                ", w("shots", "E3.png"), c("exact_full1080.png"), None, exact=True)
+            check("E1 exact: 4K                   ", w("shots", "E1.png"), expected("exact_full4k.png"), None, exact=True)
+            check("E2 exact: pillarbox, side art  ", w("shots", "E2.png"), expected("exact_pillar4k.png"), None,
+                  exact=True)
+            check("E3 exact: 1080p                ", w("shots", "E3.png"), expected("exact_full1080.png"), None,
+                  exact=True)
 
-        if api == "d3d12" and args.dxc:  # check 11 removed them
-            for dll in ["dxcompiler.dll", "dxil.dll"]:
-                shutil.copy(os.path.join(args.dxc, dll), work)
         os.remove(w("librashader.dll"))
         host(300, f"250:shot={w('shots', '9.png')}", "--image", "0:" + c("full4k.png"))
         check("9 librashader.dll missing     ", w("shots", "9.png"), c("full4k.png"), c("full4k.png"), exact=True)

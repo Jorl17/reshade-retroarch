@@ -1,9 +1,9 @@
 #version 450
 
-// Direct3D 9 (Shader Model 3) version of nearest.slang: the same enlargement computed in
-// floating point and sampled with point filtering at the centre of the chosen pixel, as
-// Shader Model 3 has no integer arithmetic or exact texel fetch.
-// Output pixel (x, y) is input pixel (floor(x * in_w / out_w), floor(y * in_h / out_h)).
+// Direct3D 9 (Shader Model 3) version of nearest.slang: the same enlargement and colour
+// inversion computed in floating point and sampled with point filtering at the centre of
+// the chosen pixel, as Shader Model 3 has no integer arithmetic or exact texel fetch.
+// Output pixel (x, y) is 1 - input pixel (floor(x * in_w / out_w), floor(y * in_h / out_h)).
 
 layout(push_constant) uniform Push
 {
@@ -36,5 +36,5 @@ void main()
 {
     const vec2 out_pixel = floor(vTexCoord * params.OutputSize.xy);
     const vec2 p = floor(out_pixel * params.SourceSize.xy / params.OutputSize.xy);
-    FragColor = vec4(texture(Source, (p + 0.5) * params.SourceSize.zw).rgb, 1.0);
+    FragColor = vec4(1.0 - texture(Source, (p + 0.5) * params.SourceSize.zw).rgb, 1.0);
 }

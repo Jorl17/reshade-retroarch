@@ -1,6 +1,8 @@
 // Command-line tool: applies a RetroArch shader preset (.slangp file) to a screenshot
 // and saves the result as a PNG, using the same code the ReShade add-on uses (grid
 // detection, capture of the native image, librashader), but with no game and no ReShade.
+// Renders with Direct3D 11 (the add-on's Renderer) or, with --api d3d12, with Direct3D 12
+// (render_d3d12.h).
 // The end-to-end test (tests/e2e.py) uses its output as the expected result, and
 // tests/compat_sweep.py uses it to try every preset in a shader folder.
 //
@@ -20,6 +22,11 @@
 //     --set name=value    change a preset parameter before rendering (repeatable)
 //     --hashes 1          print a checksum of the back buffer after every frame, to see
 //                         whether frames of an unchanging input differ from each other
+//                         (Direct3D 11 only)
+//     --api d3d11|d3d12   graphics API to render with (default d3d11); --native and
+//                         --hashes are Direct3D 11 only
+//     --dxc DIR           Direct3D 12: folder with dxcompiler.dll and dxil.dll (default:
+//                         this executable's folder)
 //
 // Exit code: 0 success, 1 failure (message on stderr), 2 bad command line.
 // librashader.dll must be next to the executable.
@@ -28,6 +35,7 @@
 #include "grid_detect.h"
 #include "librashader_api.h"
 #include "png_io.h"
+#include "render_d3d12.h"
 #include "renderer.h"
 
 #include <chrono>
@@ -119,6 +127,7 @@ int wmain(int argc, wchar_t **argv)
     // options are ignored; an option with no value ends the list.
     int frames = 3;
     bool hashes = false;
+    std::wstring api = L"d3d11", dxc_dir;
     const wchar_t *native_out = nullptr;
     std::wstring grid_mode = L"auto";
     std::vector<std::pair<std::string, float>> sets;
@@ -133,6 +142,10 @@ int wmain(int argc, wchar_t **argv)
             native_out = argv[++a];
         else if (opt == L"--hashes")
             hashes = _wtoi(argv[++a]) != 0;
+        else if (opt == L"--api")
+            api = argv[++a];
+        else if (opt == L"--dxc")
+            dxc_dir = argv[++a];
         else if (opt == L"--grid")
             grid_mode = argv[++a];
         else if (opt == L"--set")
@@ -157,13 +170,69 @@ int wmain(int argc, wchar_t **argv)
     // Load librashader.dll from this executable's folder.
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring dll = exe;
-    dll = dll.substr(0, dll.find_last_of(L"\\/") + 1) + L"librashader.dll";
+    const std::wstring exe_dir = std::wstring(exe).substr(0, std::wstring(exe).find_last_of(L"\\/") + 1);
+    const std::wstring dll = exe_dir + L"librashader.dll";
     std::string err;
     if (!libra::load(dll, err))
     {
         fprintf(stderr, "%s\n", err.c_str());
         return 1;
+    }
+
+    // Decide where the native image is. "auto" runs the add-on's grid detector on the
+    // input and fails (exit 1) if it finds none; "frame" and "WxH" cover the whole frame.
+    PixelGrid grid;
+    if (grid_mode == L"auto")
+    {
+        FrameView f;
+        f.data = rgba.data();
+        f.width = int(w);
+        f.height = int(h);
+        f.pitch = size_t(w) * 4;
+        std::string log;
+        grid = detect_grid(f, &log);
+        printf("grid: %s  [%s]\n", grid.describe().c_str(), log.c_str());
+        if (!grid.valid)
+            return 1;
+    }
+    else
+    {
+        grid.valid = true;
+        grid.rect_w = int(w);
+        grid.rect_h = int(h);
+        grid.native_w = int(w);
+        grid.native_h = int(h);
+        if (grid_mode != L"frame" && swscanf_s(grid_mode.c_str(), L"%dx%d", &grid.native_w, &grid.native_h) != 2)
+        {
+            fwprintf(stderr, L"bad --grid %s\n", grid_mode.c_str());
+            return 2;
+        }
+        printf("grid: %s\n", grid.describe().c_str());
+    }
+
+    // Direct3D 12: the whole render is in render_d3d12(); save its result and stop.
+    if (api == L"d3d12")
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!render_d3d12(rgba, w, h, grid, narrow(argv[1]), sets, frames, dxc_dir.empty() ? exe_dir : dxc_dir, err))
+        {
+            fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        printf("%d frames in %.0f ms (Direct3D 12)\n", frames,
+               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        if (!save_png(argv[3], rgba.data(), w, h, w * 4))
+        {
+            fprintf(stderr, "could not save output\n");
+            return 1;
+        }
+        printf("ok\n");
+        return 0;
+    }
+    if (api != L"d3d11")
+    {
+        fwprintf(stderr, L"bad --api %s\n", api.c_str());
+        return 2;
     }
 
     // A Direct3D 11 device on the default GPU, like the one a D3D11 game creates.
@@ -197,37 +266,6 @@ int wmain(int argc, wchar_t **argv)
     {
         fprintf(stderr, "could not create the back buffer stand-in\n");
         return 1;
-    }
-
-    // Decide where the native image is. "auto" runs the add-on's grid detector on the
-    // input and fails (exit 1) if it finds none; "frame" and "WxH" cover the whole frame.
-    PixelGrid grid;
-    if (grid_mode == L"auto")
-    {
-        FrameView f;
-        f.data = rgba.data();
-        f.width = int(w);
-        f.height = int(h);
-        f.pitch = size_t(w) * 4;
-        std::string log;
-        grid = detect_grid(f, &log);
-        printf("grid: %s  [%s]\n", grid.describe().c_str(), log.c_str());
-        if (!grid.valid)
-            return 1;
-    }
-    else
-    {
-        grid.valid = true;
-        grid.rect_w = int(w);
-        grid.rect_h = int(h);
-        grid.native_w = int(w);
-        grid.native_h = int(h);
-        if (grid_mode != L"frame" && swscanf_s(grid_mode.c_str(), L"%dx%d", &grid.native_w, &grid.native_h) != 2)
-        {
-            fwprintf(stderr, L"bad --grid %s\n", grid_mode.c_str());
-            return 2;
-        }
-        printf("grid: %s\n", grid.describe().c_str());
     }
 
     // Set up the renderer (the add-on's capture and compositing code) and compile the

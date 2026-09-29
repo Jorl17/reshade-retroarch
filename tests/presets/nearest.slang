@@ -1,11 +1,13 @@
 #version 450
 
 // Test shader for tests/e2e.py: enlarges the input to the output size with
-// nearest-neighbour sampling in exact integer maths, so its result is the same bytes on
-// every graphics API. Used to check that the add-on's own work (frame copy, capture of
-// the native picture, write-back) is exact, apart from any differences between
-// librashader's runtimes for different APIs.
-// Output pixel (x, y) is input pixel (floor(x * in_w / out_w), floor(y * in_h / out_h)).
+// nearest-neighbour sampling in exact integer maths, and inverts the colours, so its
+// result is the same bytes on every graphics API. Used to check that the add-on's own work
+// (frame copy, capture of the native picture, write-back) is exact, apart from any
+// differences between librashader's runtimes for different APIs. The inversion makes sure
+// the result never equals the untouched frame, even where an exact enlargement would.
+// Output pixel (x, y) is 1 - input pixel (floor(x * in_w / out_w), floor(y * in_h / out_h)),
+// that is 255 - v for each 8-bit channel value v.
 
 layout(push_constant) uniform Push
 {
@@ -38,5 +40,5 @@ void main()
 {
     const uvec2 out_pixel = uvec2(vTexCoord * params.OutputSize.xy);
     const uvec2 p = (out_pixel * uvec2(params.SourceSize.xy)) / uvec2(params.OutputSize.xy);
-    FragColor = vec4(texelFetch(Source, ivec2(p), 0).rgb, 1.0);
+    FragColor = vec4(1.0 - texelFetch(Source, ivec2(p), 0).rgb, 1.0);
 }

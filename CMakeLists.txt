@@ -54,8 +54,8 @@ target_link_libraries(files_test PRIVATE rra_core)
 add_executable(params_test tools/params_test.cpp)
 target_link_libraries(params_test PRIVATE rra_core)
 
-add_executable(render_png tools/render_png.cpp)
-target_link_libraries(render_png PRIVATE rra_core windowscodecs ole32)
+add_executable(render_png tools/render_png.cpp tools/render_d3d12.cpp)
+target_link_libraries(render_png PRIVATE rra_core d3d12 windowscodecs ole32)
 
 # Test host: a stand-in game that draws identical frames with every graphics API.
 add_executable(test_host testhost/main.cpp testhost/d3d9.cpp testhost/d3d10.cpp testhost/d3d11.cpp
