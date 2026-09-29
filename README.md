@@ -175,14 +175,21 @@ fetches the pinned `librashader.dll`.
 
 ### What CI runs
 
-CI (GitHub Actions) runs everything above except the Direct3D end-to-end tests: it runs
-`tests/e2e.py` on Vulkan only, with Mesa's software Vulkan driver, because CI machines
-have no GPU and ReShade does not run on Windows' software Direct3D. Run the Direct3D
-end-to-end tests on a PC with a GPU before a release:
+CI (GitHub Actions) runs everything above, but the end-to-end test only on OpenGL, with
+Mesa's software OpenGL driver. CI machines have no GPU, and:
+
+- ReShade does not run on Windows' software Direct3D.
+- ReShade 6.8.0 crashes on start-up on Mesa's software Vulkan driver (lavapipe), even
+  with no add-ons.
+
+So run the Direct3D and Vulkan end-to-end tests on a PC with a GPU before a release:
 
 ```
 python tests/e2e.py --reshade <ReShade64.dll> --librashader <librashader.dll> --shaders <slang-shaders> --preset <preset> --native <native.png>
 ```
+
+Run it from a normal prompt, not an administrator one: with administrator rights, the
+Vulkan loader ignores the variables the test uses to load ReShade (`VK_ADD_LAYER_PATH`).
 
 `tests/ci_deps.py <folder>` downloads what CI uses (pinned versions).
 

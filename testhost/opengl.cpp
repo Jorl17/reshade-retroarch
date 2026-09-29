@@ -14,13 +14,48 @@ namespace
 // only declares OpenGL 1.1, so these are declared here and loaded at run time with
 // wglGetProcAddress.
 constexpr GLenum kReadFramebuffer = 0x8CA8, kDrawFramebuffer = 0x8CA9, kColorAttachment0 = 0x8CE0,
-                 kFramebufferComplete = 0x8CD5, kRGBA8 = 0x8058;
+                 kFramebufferComplete = 0x8CD5, kRGBA8 = 0x8058, kPixelPackBuffer = 0x88EB,
+                 kPixelUnpackBuffer = 0x88EC;
+using PFNBindBuffer = void(APIENTRY *)(GLenum, GLuint);
 using PFNGenFramebuffers = void(APIENTRY *)(GLsizei, GLuint *);
 using PFNDeleteFramebuffers = void(APIENTRY *)(GLsizei, const GLuint *);
 using PFNBindFramebuffer = void(APIENTRY *)(GLenum, GLuint);
 using PFNFramebufferTexture2D = void(APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
 using PFNCheckFramebufferStatus = GLenum(APIENTRY *)(GLenum);
 using PFNBlitFramebuffer = void(APIENTRY *)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
+
+// Reads and clears OpenGL's error flags; returns the first error, or GL_NO_ERROR. The
+// host calls this before each of its checked calls, so a check reports only the errors of
+// the host's own calls: ReShade, the add-on and librashader make OpenGL calls on the same
+// context between the host's frames, and an error stays recorded until it is read.
+// (OpenGL keeps at most one error per kind, so the loop is short.)
+GLenum take_gl_error()
+{
+    GLenum first = GL_NO_ERROR;
+    for (int i = 0; i < 16; ++i)
+    {
+        const GLenum e = glGetError();
+        if (e == GL_NO_ERROR)
+            break;
+        if (first == GL_NO_ERROR)
+            first = e;
+    }
+    return first;
+}
+
+// `code` in hexadecimal ("0x0502"), the form OpenGL's documentation uses.
+std::string hex(GLenum code)
+{
+    char text[16];
+    snprintf(text, sizeof(text), "0x%04X", unsigned(code));
+    return text;
+}
+
+// `what` followed by " failed (OpenGL error 0x....)", for error messages.
+std::string gl_failure(const char *what, GLenum code)
+{
+    return std::string(what) + " failed (OpenGL error " + hex(code) + ")";
+}
 
 // With OpenGL the back buffer is the window's client area, so the window is sized to the
 // requested back buffer (see size_window in backend.h). Only Format::rgba8 is supported.
@@ -73,16 +108,17 @@ public:
             error = "could not create an OpenGL context";
             return false;
         }
+        BindBuffer = reinterpret_cast<PFNBindBuffer>(wglGetProcAddress("glBindBuffer"));
         GenFramebuffers = reinterpret_cast<PFNGenFramebuffers>(wglGetProcAddress("glGenFramebuffers"));
         DeleteFramebuffers = reinterpret_cast<PFNDeleteFramebuffers>(wglGetProcAddress("glDeleteFramebuffers"));
         BindFramebuffer = reinterpret_cast<PFNBindFramebuffer>(wglGetProcAddress("glBindFramebuffer"));
         FramebufferTexture2D = reinterpret_cast<PFNFramebufferTexture2D>(wglGetProcAddress("glFramebufferTexture2D"));
         CheckFramebufferStatus = reinterpret_cast<PFNCheckFramebufferStatus>(wglGetProcAddress("glCheckFramebufferStatus"));
         BlitFramebuffer = reinterpret_cast<PFNBlitFramebuffer>(wglGetProcAddress("glBlitFramebuffer"));
-        if (!GenFramebuffers || !DeleteFramebuffers || !BindFramebuffer || !FramebufferTexture2D || !CheckFramebufferStatus ||
-            !BlitFramebuffer)
+        if (!BindBuffer || !GenFramebuffers || !DeleteFramebuffers || !BindFramebuffer || !FramebufferTexture2D ||
+            !CheckFramebufferStatus || !BlitFramebuffer)
         {
-            error = "OpenGL 3.0 framebuffer functions are not available";
+            error = "OpenGL 3.0 buffer and framebuffer functions are not available";
             unsupported = true;
             return false;
         }
@@ -101,6 +137,7 @@ public:
 
     bool draw(const Image *img, std::string &error) override
     {
+        take_gl_error(); // not this draw's: see take_gl_error
         BindFramebuffer(kDrawFramebuffer, 0);
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, GLsizei(w_), GLsizei(h_));
@@ -108,47 +145,38 @@ public:
         {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            return glGetError() == GL_NO_ERROR || (error = "glClear failed", false);
+            const GLenum e = take_gl_error();
+            return e == GL_NO_ERROR || (error = gl_failure("glClear", e), false);
         }
-        const Picture *p = picture(*img);
+        const Picture *p = picture(*img, error);
         if (p == nullptr)
-        {
-            error = "could not create the picture texture";
             return false;
-        }
-        // Errors recorded before this point are not this draw's (ReShade makes OpenGL calls
-        // of its own when a frame is presented): clear them, so the check below is about
-        // the blit only. (At most a few: OpenGL keeps one per error kind.)
-        for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i)
-        {
-        }
         // Texture row 0 is the picture's top row; window row 0 is the bottom. Flip, so
         // the window shows the picture the right way up, as the Direct3D hosts do.
         BindFramebuffer(kReadFramebuffer, p->fbo);
         BlitFramebuffer(0, 0, GLint(img->w), GLint(img->h), 0, GLint(img->h), GLint(img->w), 0, GL_COLOR_BUFFER_BIT,
                         GL_NEAREST);
         BindFramebuffer(kReadFramebuffer, 0);
-        const GLenum blit_error = glGetError();
-        if (blit_error != GL_NO_ERROR)
-        {
-            char code[16];
-            snprintf(code, sizeof(code), "0x%04X", unsigned(blit_error));
-            error = std::string("glBlitFramebuffer failed (OpenGL error ") + code + ")";
-            return false;
-        }
-        return true;
+        const GLenum e = take_gl_error();
+        return e == GL_NO_ERROR || (error = gl_failure("glBlitFramebuffer", e), false);
     }
 
     bool read_back(Image &out, std::string &error) override
     {
+        take_gl_error(); // not this read's: see take_gl_error
         std::vector<uint8_t> rows(size_t(w_) * h_ * 4);
         BindFramebuffer(kReadFramebuffer, 0);
         glReadBuffer(GL_BACK);
+        // Rows are written to `rows`, tightly packed (no pixel buffer object bound).
+        BindBuffer(kPixelPackBuffer, 0);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_PACK_SKIP_ROWS, 0);
         glReadPixels(0, 0, GLsizei(w_), GLsizei(h_), GL_RGBA, GL_UNSIGNED_BYTE, rows.data());
-        if (glGetError() != GL_NO_ERROR)
+        if (const GLenum e = take_gl_error(); e != GL_NO_ERROR)
         {
-            error = "glReadPixels failed";
+            error = gl_failure("glReadPixels", e);
             return false;
         }
         // Bottom row first: flip to top row first.
@@ -190,8 +218,8 @@ private:
     }
 
     // Returns `img` uploaded as a texture with its framebuffer object, created on first use
-    // and kept for the next frames. Null on failure.
-    const Picture *picture(const Image &img)
+    // and kept for the next frames. On failure, returns null and sets `error`.
+    const Picture *picture(const Image &img, std::string &error)
     {
         if (auto it = pictures_.find(&img); it != pictures_.end())
             return &it->second;
@@ -200,16 +228,31 @@ private:
         glBindTexture(GL_TEXTURE_2D, p.tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        // Pixels are read from img.rgba, tightly packed (no pixel buffer object bound).
+        BindBuffer(kPixelUnpackBuffer, 0);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
         glTexImage2D(GL_TEXTURE_2D, 0, GLint(kRGBA8), GLsizei(img.w), GLsizei(img.h), 0, GL_RGBA, GL_UNSIGNED_BYTE,
                      img.rgba.data());
         glBindTexture(GL_TEXTURE_2D, 0);
-        GenFramebuffers(1, &p.fbo);
-        BindFramebuffer(kReadFramebuffer, p.fbo);
-        FramebufferTexture2D(kReadFramebuffer, kColorAttachment0, GL_TEXTURE_2D, p.tex, 0);
-        const bool ok = CheckFramebufferStatus(kReadFramebuffer) == kFramebufferComplete && glGetError() == GL_NO_ERROR;
-        BindFramebuffer(kReadFramebuffer, 0);
-        if (!ok)
+        GLenum e = take_gl_error();
+        if (e != GL_NO_ERROR)
+            error = gl_failure("creating the picture texture", e);
+        else
+        {
+            GenFramebuffers(1, &p.fbo);
+            BindFramebuffer(kReadFramebuffer, p.fbo);
+            FramebufferTexture2D(kReadFramebuffer, kColorAttachment0, GL_TEXTURE_2D, p.tex, 0);
+            const GLenum status = CheckFramebufferStatus(kReadFramebuffer);
+            BindFramebuffer(kReadFramebuffer, 0);
+            if ((e = take_gl_error()) != GL_NO_ERROR)
+                error = gl_failure("creating the picture's framebuffer", e);
+            else if (status != kFramebufferComplete)
+                error = "creating the picture's framebuffer failed (framebuffer status " + hex(status) + ")";
+        }
+        if (!error.empty())
         {
             glDeleteTextures(1, &p.tex);
             DeleteFramebuffers(1, &p.fbo);
@@ -223,6 +266,7 @@ private:
     HGLRC glrc_ = nullptr;
     UINT w_ = 0, h_ = 0; // back buffer (client area) size
     std::map<const Image *, Picture> pictures_;
+    PFNBindBuffer BindBuffer = nullptr;
     PFNGenFramebuffers GenFramebuffers = nullptr;
     PFNDeleteFramebuffers DeleteFramebuffers = nullptr;
     PFNBindFramebuffer BindFramebuffer = nullptr;

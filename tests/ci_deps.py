@@ -8,13 +8,9 @@ What ends up in <folder>:
   librashader.dll               librashader 0.12.0 (the version tools/package.py ships)
   slang-shaders/                libretro's shader collection at a fixed commit; only
                                 crt/zfast-crt.slangp and its shaders are checked out
-  vulkan-runtime/vulkan-1.dll   the Vulkan loader (LunarG's Vulkan runtime)
-  mesa/x64/                     Mesa's 64-bit drivers, among them the software ones:
-                                lavapipe for Vulkan (point VK_DRIVER_FILES at
-                                lvp_icd.x86_64.json) and llvmpipe for OpenGL
-                                (libgallium_wgl.dll; see .github/workflows/ci.yml)
-  vulkan-sdk/Bin/               the Vulkan SDK's files, including the validation layer
-                                (copied only: the installer changes nothing on the system)
+  mesa/x64/                     Mesa's 64-bit drivers, among them llvmpipe, the software
+                                OpenGL driver (libgallium_wgl.dll; see
+                                .github/workflows/ci.yml for how CI uses it)
   downloads/                    the downloaded files
 
 Anything already in place is not downloaded again. Needs git and 7z (7-Zip) on PATH.
@@ -37,16 +33,10 @@ SLANG_SHADERS_URL = "https://github.com/libretro/slang-shaders.git"
 SLANG_SHADERS_COMMIT = "84bcd19a854348c0e6a1d3db814a76f11fb6f011"
 SLANG_SHADERS_FOLDERS = ["crt/shaders/zfast_crt"]  # crt/zfast-crt.slangp comes with its parent folder
 
-VULKAN_VERSION = "1.4.363.0"
-VULKAN_RUNTIME_URL = (f"https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/windows/"
-                      f"VulkanRT-X64-{VULKAN_VERSION}-Components.zip")
-VULKAN_RUNTIME_SHA256 = "a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a"
-VULKAN_SDK_URL = (f"https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/windows/"
-                  f"vulkansdk-windows-X64-{VULKAN_VERSION}.exe")
-VULKAN_SDK_SHA256 = "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141"
-
-MESA_URL = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.3/mesa3d-26.2.3-release-msvc.7z"
-MESA_SHA256 = "3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
+# 26.1.8 rather than 26.2.3: the software Vulkan driver of 26.2.3 corrupts the heap on
+# Windows (vkcube from the Vulkan SDK crashes with it; with 26.1.8 it does not).
+MESA_URL = "https://github.com/pal1000/mesa-dist-win/releases/download/26.1.8/mesa3d-26.1.8-release-msvc.7z"
+MESA_SHA256 = "4c6d32e653e0ff9ad07796e40c0bcfabf2764d849e3ce4f3b1590112c87e42f9"
 
 
 def sha256(path):
@@ -110,37 +100,13 @@ def slang_shaders(out):
     git("checkout", "--quiet", SLANG_SHADERS_COMMIT)
 
 
-def vulkan_runtime(out, downloads):
-    """vulkan-1.dll (64-bit) from LunarG's Vulkan runtime components."""
-    dll = os.path.join(out, "vulkan-runtime", "vulkan-1.dll")
-    if os.path.exists(dll):
-        return
-    with zipfile.ZipFile(download(VULKAN_RUNTIME_URL, downloads, VULKAN_RUNTIME_SHA256)) as z:
-        names = [n for n in z.namelist() if n.lower().endswith("/x64/vulkan-1.dll")]
-        if len(names) != 1:
-            sys.exit(f"expected one 64-bit vulkan-1.dll in the Vulkan runtime zip, found {names}")
-        os.makedirs(os.path.dirname(dll), exist_ok=True)
-        with open(dll, "wb") as f:
-            f.write(z.read(names[0]))
-
-
 def mesa(out, downloads):
     """The x64 folder of the mesa-dist-win release (Mesa's 64-bit drivers)."""
     folder = os.path.join(out, "mesa")
-    if os.path.exists(os.path.join(folder, "x64", "lvp_icd.x86_64.json")):
+    if os.path.exists(os.path.join(folder, "x64", "libgallium_wgl.dll")):
         return
     archive = download(MESA_URL, downloads, MESA_SHA256)
     subprocess.run(["7z", "x", archive, f"-o{folder}", "x64", "-y"], check=True, stdout=subprocess.DEVNULL)
-
-
-def vulkan_sdk(out, downloads):
-    """The Vulkan SDK's files, copied with the installer's copy_only=1 option."""
-    folder = os.path.join(out, "vulkan-sdk")
-    if os.path.exists(os.path.join(folder, "Bin", "VkLayer_khronos_validation.json")):
-        return
-    installer = download(VULKAN_SDK_URL, downloads, VULKAN_SDK_SHA256)
-    subprocess.run([installer, "--root", os.path.abspath(folder), "--accept-licenses", "--default-answer",
-                    "--confirm-command", "install", "copy_only=1"], check=True)
 
 
 def main():
@@ -151,9 +117,7 @@ def main():
     reshade(out, downloads)
     librashader(out, downloads)
     slang_shaders(out)
-    vulkan_runtime(out, downloads)
     mesa(out, downloads)
-    vulkan_sdk(out, downloads)
     print(f"test dependencies ready in {out}")
 
 

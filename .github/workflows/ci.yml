@@ -45,9 +45,10 @@ jobs:
         shell: bash
         run: out/build/files_test.exe
 
-      # The add-on inside ReShade, on Vulkan and OpenGL with Mesa's software drivers (with
-      # the Vulkan validation layer). Direct3D is only tested locally: ReShade does not run
-      # on Windows' software Direct3D devices, and this machine has no GPU (see README).
+      # The add-on inside ReShade, on OpenGL with Mesa's software driver. Direct3D and Vulkan
+      # are only tested locally: this machine has no GPU, ReShade does not run on Windows'
+      # software Direct3D devices, and ReShade 6.8.0 crashes on Mesa's software Vulkan
+      # driver (see README).
       - name: Cache end-to-end test dependencies
         uses: actions/cache@v4
         with:
@@ -92,17 +93,13 @@ jobs:
           Set-ItemProperty -Path $key -Name Flags -Value 1 -Type DWord
           Set-ItemProperty -Path $key -Name Version -Value 2 -Type DWord
 
-      - name: End-to-end test (Vulkan and OpenGL, software rendering)
+      - name: End-to-end test (OpenGL, software rendering)
         shell: bash
         run: |
-          export PATH="$PWD/out/ci-deps/vulkan-runtime:$PATH"
-          export VK_DRIVER_FILES="$(cygpath -w "$PWD/out/ci-deps/mesa/x64/lvp_icd.x86_64.json")"
           export GALLIUM_DRIVER=llvmpipe
-          export VK_LOADER_DEBUG=error,warn
-          python tests/e2e.py --apis vulkan,opengl --reshade out/ci-deps/ReShade64.dll \
+          python tests/e2e.py --apis opengl --reshade out/ci-deps/ReShade64.dll \
             --librashader out/ci-deps/librashader.dll --shaders out/ci-deps/slang-shaders \
-            --preset crt/zfast-crt.slangp --native out/synthetic/native.png \
-            --vulkan-validation out/ci-deps/vulkan-sdk/Bin
+            --preset crt/zfast-crt.slangp --native out/synthetic/native.png
 
       - name: Package
         shell: bash
