@@ -133,14 +133,11 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
   GPU. If it cannot match the GPU or the game's queue, it leaves the game untouched and
   says why. Games that draw their final picture on a different GPU queue from the one
   they show it with (a few recent games do) may not work correctly.
-- Direct3D 9 is experimental: the add-on works, but librashader's Direct3D 9 support is
-  limited to shaders that fit Direct3D 9's old shader model, and the CRT presets tried so
-  far (crt-royale, crt-geom, zfast-crt) do not run on it; the picture is then left
-  untouched and the window shows librashader's error.
+- Direct3D 9 does not work yet: every preset tried so far fails inside librashader
+  (`D3DERR_INVALIDCALL`), so the picture is left untouched and the window shows the error.
 - Direct3D 12 needs Microsoft's DirectX Shader Compiler, downloaded separately (see Install).
-- On Direct3D 12 (and Direct3D 9), librashader samples some shaders slightly differently
-  from the other APIs, so a preset can look a little different there: crt-royale's glow,
-  for example, or pixel edges at non-integer scales moved by one pixel.
+- On Direct3D 12, librashader renders some presets slightly differently from the other
+  APIs, so they can look a little different there (crt-royale's glow, for example).
 - No HDR content (see FAQ).
 - Automatic detection needs sharp pixels. For smoothly upscaled games, use **Fixed**.
 - Bezel shaders only cover the game area.
