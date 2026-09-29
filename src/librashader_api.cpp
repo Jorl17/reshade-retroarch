@@ -10,6 +10,29 @@ namespace
 std::mutex g_mutex;        // protects the two below and load_d3d12_compiler's state
 libra_instance_t g_api = {}; // librashader's functions, filled by load()
 bool g_loaded = false;     // load() has succeeded
+
+// Returns, for the error message, which Microsoft runtimes librashader.dll needs that are
+// not installed: ": install ..." naming each package, or "" if none is missing. A DLL
+// counts as installed if it is in `dll_dir` (librashader's folder, searched first for its
+// dependencies) or where Windows looks for DLLs (checked without running it).
+std::string missing_runtimes(const std::wstring &dll_dir)
+{
+    const auto found = [&](const wchar_t *name) {
+        if (GetFileAttributesW((dll_dir + name).c_str()) != INVALID_FILE_ATTRIBUTES)
+            return true;
+        HMODULE m = LoadLibraryExW(name, nullptr, LOAD_LIBRARY_AS_DATAFILE);
+        if (m != nullptr)
+            FreeLibrary(m);
+        return m != nullptr;
+    };
+    std::string missing;
+    if (!found(L"D3DX9_43.dll"))
+        missing += "Microsoft's DirectX End-User Runtime (June 2010), for D3DX9_43.dll";
+    if (!found(L"MSVCP140.dll") || !found(L"VCRUNTIME140.dll") || !found(L"VCRUNTIME140_1.dll"))
+        missing += std::string(missing.empty() ? "" : " and ") +
+                   "the Microsoft Visual C++ Redistributable (x64), for MSVCP140.dll and VCRUNTIME140.dll";
+    return missing.empty() ? "" : ": install " + missing;
+}
 }
 
 bool libra::load(const std::wstring &dll_path, std::string &error)
@@ -23,7 +46,12 @@ bool libra::load(const std::wstring &dll_path, std::string &error)
     // whatever the DLL search order would find.
     if (LoadLibraryExW(dll_path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) == nullptr)
     {
-        error = "librashader.dll not found next to the add-on (error " + std::to_string(GetLastError()) + ")";
+        const DWORD code = GetLastError();
+        if (GetFileAttributesW(dll_path.c_str()) == INVALID_FILE_ATTRIBUTES)
+            error = "librashader.dll not found next to the add-on (error " + std::to_string(code) + ")";
+        else
+            error = "librashader.dll could not be loaded (error " + std::to_string(code) + ")" +
+                    missing_runtimes(dll_path.substr(0, dll_path.find_last_of(L"\\/") + 1));
         return false;
     }
     g_api = librashader_load_instance();

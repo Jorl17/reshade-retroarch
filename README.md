@@ -25,6 +25,11 @@ as HD side art, are left alone.
    and says so. (Not sure which your game uses? The RetroArch Shaders window shows a
    message if it needs them.)
 
+The add-on also needs two Microsoft runtimes that most PCs with games already have. If
+the window says one is missing, install it:
+[DirectX End-User Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=35)
+and [Visual C++ Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+
 ## Use
 
 Press **Home** and open the **RetroArch Shaders** window (a tab next to Home, or a
@@ -116,6 +121,7 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 | Message | Fix |
 |---|---|
 | `librashader.dll not found` | Put `librashader.dll` next to `RetroArchShaders.addon64`. |
+| `librashader.dll could not be loaded: install ...` | Install the runtime it names (links under [Install](#install)). |
 | `Paused: ReShade is not rendering effects` | Effects are toggled off, or `reshade-shaders\Shaders\RetroArchShaders.fx` is missing. |
 | `Waiting: looking for the game's pixels` | Needs a scene with detail. Use **Fixed** if it never finds one. |
 | Red error under the shader name | The preset failed to load. Check it in RetroArch. |
