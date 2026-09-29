@@ -31,10 +31,11 @@ add_library(rra_core STATIC
     src/librashader_api.cpp
     src/discovery.cpp
     src/companion.cpp
-    src/capture.cpp)
+    src/capture.cpp
+    src/vulkan_support.cpp)
 target_include_directories(rra_core PUBLIC src ${GEN})
 # Third-party headers are "external": their warnings are not ours to fix.
-target_include_directories(rra_core SYSTEM PUBLIC third_party/librashader)
+target_include_directories(rra_core SYSTEM PUBLIC third_party/librashader third_party/vulkan)
 target_link_libraries(rra_core PUBLIC d3d11 advapi32)
 
 # The ReShade add-on. Its renderer and grid detector work through ReShade's API.

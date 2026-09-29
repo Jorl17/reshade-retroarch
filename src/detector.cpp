@@ -12,9 +12,6 @@ namespace
 // known, and while there is none or it is provisional (rescaled after a resize).
 constexpr double kIntervalKnown = 1.0;
 constexpr double kIntervalSearching = 0.25;
-// Without a fence, a copy is assumed finished after this many frames. Graphics drivers
-// queue at most about 3 frames ahead, so by then the GPU has done it.
-constexpr int kFramesToWait = 3;
 }
 
 using namespace reshade::api;
@@ -100,9 +97,9 @@ bool GridDetector::ensure_readback(device *dev, const resource_desc &desc)
 // Advances the detection by one step (see detector.h). First handles a change of frame
 // size, then acts on stage_:
 //  - idle: once enough time has passed, queues a GPU copy of `frame` into readback_ and a
-//    fence signal after it;
-//  - copied: once the GPU has finished the copy (fence reached, or kFramesToWait ticks
-//    passed where there is no fence), maps readback_ and gives the pixels to the worker;
+//    fence signal after it (without a fence, waits right there for the GPU to finish it);
+//  - copied: once the GPU has finished the copy (fence reached), maps readback_ and gives
+//    the pixels to the worker;
 //  - analysing: once the worker is done, unmaps readback_ and passes the result to consume().
 void GridDetector::tick(device *dev, command_queue *queue, resource frame, double now)
 {
@@ -149,7 +146,13 @@ void GridDetector::tick(device *dev, command_queue *queue, resource frame, doubl
             queue->flush_immediate_command_list();
             queue->signal(fence_, ++fence_value_);
         }
-        frames_waited_ = 0;
+        else
+        {
+            // No fence (ReShade 6.8 makes one on every API except Vulkan drivers without
+            // timeline semaphores): submit the copy and wait for the GPU to finish all its
+            // work. Slower, but a count of frames would only guess how far behind it is.
+            queue->wait_idle();
+        }
         copy_generation_ = generation_;
         last_request_ = now;
         stage_ = Stage::copied;
@@ -157,8 +160,7 @@ void GridDetector::tick(device *dev, command_queue *queue, resource frame, doubl
     }
     case Stage::copied:
     {
-        const bool done = fence_.handle != 0 ? dev->get_completed_fence_value(fence_) >= fence_value_
-                                             : ++frames_waited_ >= kFramesToWait;
+        const bool done = fence_.handle == 0 || dev->get_completed_fence_value(fence_) >= fence_value_;
         if (!done)
             break; // GPU not done yet; check again next frame
         subresource_data data = {};

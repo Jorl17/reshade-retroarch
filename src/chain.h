@@ -57,9 +57,23 @@ enum class GraphicsApi
 struct ChainDevice
 {
     GraphicsApi api = GraphicsApi::d3d11;
-    // ID3D11Device*, ID3D12Device* or IDirect3DDevice9* (as an integer).
+    // ID3D11Device*, ID3D12Device*, IDirect3DDevice9* or VkDevice (as an integer).
     uint64_t device = 0;
+    // Vulkan only (see vulkan_support.h): the VkInstance and VkPhysicalDevice, the VkQueue
+    // the chain's work is submitted to and its queue family, and vkGetInstanceProcAddr and
+    // vkGetDeviceProcAddr.
+    uint64_t instance = 0, physical_device = 0, queue = 0;
+    uint32_t queue_family = 0;
+    void *get_instance_proc_addr = nullptr, *get_device_proc_addr = nullptr;
 };
+
+// How many frames librashader's Direct3D 12 and Vulkan runtimes keep per-frame objects for:
+// what a chain draws in one frame() call is reused or freed by the frame() call this many
+// calls later, so the GPU must have finished the earlier frame by then. Chains are created
+// with this value, and the add-on's renderer (frame_renderer.h) waits for the GPU to finish
+// the frame this many frames back before recording a new one, so it holds however many
+// frames ReShade or the driver would otherwise let the GPU fall behind.
+constexpr uint32_t kFramesInFlight = 3;
 
 // One image a chain reads (its input) or draws into (its output), as native handles of
 // the chain's API. Which fields are used depends on the API:
@@ -73,6 +87,9 @@ struct ChainDevice
 //    format, e.g. GL_RGBA8), `width` and `height`, for input and output alike.
 //  - Direct3D 9: `resource` for the input (an IDirect3DTexture9*), `view` for the output
 //    (the IDirect3DSurface9* to draw into).
+//  - Vulkan: `resource` (a VkImage), `format` (a VkFormat), `width` and `height`. The
+//    input must be in the SHADER_READ_ONLY_OPTIMAL layout and the output in
+//    COLOR_ATTACHMENT_OPTIMAL, where it stays.
 // (Other APIs are added with their support.)
 struct ChainImage
 {
@@ -115,7 +132,8 @@ public:
     // (noise, flicker, interlacing) use it, so it should go up by one each frame. The work
     // is recorded on `commands`, the API's native command recorder: an
     // ID3D11DeviceContext* on Direct3D 11, an open ID3D12GraphicsCommandList* on
-    // Direct3D 12 (librashader binds its own descriptor heaps on it); unused on OpenGL and
+    // Direct3D 12 (librashader binds its own descriptor heaps on it), a VkCommandBuffer in
+    // the recording state on Vulkan; unused on OpenGL and
     // Direct3D 9 (which draws on the device given to create()). On OpenGL,
     // the context current on the calling thread is used (the one the chain was created with). Returns false and sets `error` if no preset is loaded or librashader
     // reports an error.

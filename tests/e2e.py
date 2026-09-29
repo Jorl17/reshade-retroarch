@@ -51,7 +51,7 @@ import make_synthetic as ms  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]
 # APIs the add-on renders on. On the others it must leave frames untouched and say why.
-SUPPORTED = {"d3d9", "d3d11", "d3d12", "opengl"}
+SUPPORTED = {"d3d9", "d3d11", "d3d12", "opengl", "vulkan"}
 # What ReShade.log must say on an API the add-on does not support.
 API_NAMES = {"d3d9": "Direct3D 9", "d3d10": "Direct3D 10", "d3d11": "Direct3D 11", "d3d12": "Direct3D 12",
              "opengl": "OpenGL", "vulkan": "Vulkan"}

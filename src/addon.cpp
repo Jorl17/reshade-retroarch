@@ -103,6 +103,11 @@ struct RuntimeData
     // Error from an overlay button or slider; stays until a later action succeeds or another
     // ReShade preset is selected.
     std::string action_error;
+
+    // Waits for the GPU before the members are destroyed: `chain` goes before `renderer`
+    // (members are destroyed in reverse order), and on Direct3D 12 and Vulkan freeing a
+    // chain releases its objects at once, even if the GPU is still using them.
+    ~RuntimeData() { renderer.wait_idle(); }
 };
 
 // One background search for RetroArch presets: the thread finds the shader folders
@@ -485,16 +490,16 @@ void on_set_current_preset_path(effect_runtime *runtime, const char *path)
         set_preset_path(*rd, path);
 }
 
-// Gets everything ready to render for rd on device `dev`, doing only what is not
-// done yet: loads librashader.dll from the add-on's folder, sets up the renderer, and
-// compiles the companion .slangp into rd.chain when it is new, changed on disk, or a button
-// asked for it. Returns true when a compiled shader is ready; false when there is nothing
-// to render with, normally with rd.error saying why.
-bool prepare(RuntimeData &rd, device *dev)
+// Gets everything ready to render for rd on device `dev`, rendering on `queue`, doing only
+// what is not done yet: loads librashader.dll from the add-on's folder, sets up the
+// renderer, and compiles the companion .slangp into rd.chain when it is new, changed on
+// disk, or a button asked for it. Returns true when a compiled shader is ready; false when
+// there is nothing to render with, normally with rd.error saying why.
+bool prepare(RuntimeData &rd, device *dev, command_queue *queue)
 {
     std::string err;
     ChainDevice chain_device;
-    if (!FrameRenderer::chain_device(dev, chain_device, err))
+    if (!FrameRenderer::chain_device(dev, queue, chain_device, err))
     {
         set_error(rd, err); // this graphics API is not supported (yet)
         return false;
@@ -522,7 +527,7 @@ bool prepare(RuntimeData &rd, device *dev)
     }
     if (!rd.renderer_ready)
     {
-        if (!rd.renderer.init(dev, err))
+        if (!rd.renderer.init(dev, queue, err))
         {
             set_error(rd, err);
             return false;
@@ -541,6 +546,9 @@ bool prepare(RuntimeData &rd, device *dev)
         rd.chain_mtime = rd.companion_mtime;
         rd.chain_error.clear();
         const std::string name = utf8_from_path(rd.companion);
+        // The chain being replaced may still be in use by frames the GPU has not finished.
+        if (rd.chain.ready())
+            rd.renderer.wait_idle();
         const auto t0 = std::chrono::steady_clock::now();
         if (rd.chain.create(chain_device, name, err))
         {
@@ -597,7 +605,11 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
         set_error(*rd, "HDR output is not supported yet. Turn HDR off in the game to use RetroArch shaders.");
         return;
     }
-    if (!prepare(*rd, dev))
+    const bool ready = prepare(*rd, dev, runtime->get_command_queue());
+    // Compiling a preset in prepare() can take seconds. Count effects as rendered when it
+    // ends, or on_reshade_present, right after, would take the compile for a pause.
+    rd->last_effects = now_seconds();
+    if (!ready)
         return;
 
     // The back buffer texture behind `rtv`, with its size and format.

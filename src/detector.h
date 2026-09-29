@@ -20,10 +20,10 @@
 //
 // How a detection runs: tick() copies the frame into a readback texture (a texture whose
 // memory the CPU is allowed to read), on later frames checks without waiting whether the
-// GPU has finished that copy (with a fence: a marker the GPU reaches after the copy; on
-// APIs without fences, by waiting a few frames), and then hands the copied pixels to a
-// worker thread that runs detect_grid(). So the render thread never waits for the GPU or
-// for detection. A new copy
+// GPU has finished that copy (with a fence: a marker the GPU reaches after the copy), and
+// then hands the copied pixels to a worker thread that runs detect_grid(). So the render
+// thread never waits for the GPU or for detection (except where ReShade cannot make a
+// fence: then tick() waits for the GPU right after queueing the copy). A new copy
 // starts 1 second after the previous one while a confirmed grid is known, and 0.25 seconds
 // after it while there is none.
 //
@@ -122,13 +122,12 @@ private:
     reshade::api::resource readback_ = {};
     uint32_t readback_w_ = 0, readback_h_ = 0;
     reshade::api::format readback_format_ = reshade::api::format::unknown;
-    // Fence signalled after each copy with value fence_value_, or {0} on APIs where ReShade
-    // cannot create one; then a copy counts as finished after kFramesToWait ticks.
-    // fence_tried_ records that creating it was attempted.
+    // Fence signalled after each copy with value fence_value_, or {0} where ReShade cannot
+    // create one (then tick() waits for the copy when it queues it). fence_tried_ records
+    // that creating it was attempted.
     reshade::api::fence fence_ = {};
     uint64_t fence_value_ = 0;
     bool fence_tried_ = false;
-    int frames_waited_ = 0;
     // generation_ goes up whenever results of detections already under way become stale
     // (frame size change, redetect(), shutdown()). copy_generation_ is its value when the
     // copy being analysed was made; that result is used only if the two still match.

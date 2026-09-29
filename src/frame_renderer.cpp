@@ -3,6 +3,7 @@
 
 #include "frame_renderer.h"
 #include "capture.h"
+#include "vulkan_support.h"
 
 #include <d3d12.h>
 
@@ -10,24 +11,46 @@
 
 using namespace reshade::api;
 
-// The private Direct3D 12 command list librashader records into (see frame_renderer.h).
-// Three command allocators (the memory a command list records into) are used in turn; an
-// allocator is reused only once the GPU has finished the list recorded into it, which a
-// fence (a counter the GPU sets when it reaches a point in the queue) tells.
+// A ring of kFramesInFlight private command lists librashader records into on Direct3D 12
+// and Vulkan (see frame_renderer.h), used in turn. One is reused only once the GPU has
+// finished what was recorded into it the last time, which a fence tells (a marker the GPU
+// reaches after the list; ReShade's fences are not used because signalling one submits
+// ReShade's commands at that point). So when frame N is recorded, the GPU has finished
+// frame N - kFramesInFlight, as librashader needs (see kFramesInFlight in chain.h).
 struct FrameRenderer::PrivateCommands
 {
-    static constexpr int kAllocators = 3;
-    ID3D12CommandAllocator *allocators[kAllocators] = {};
-    UINT64 finished_at[kAllocators] = {}; // fence value after the last list recorded with each
+    // Implementations wait until the GPU has finished every list they submitted, then
+    // release everything.
+    virtual ~PrivateCommands() = default;
+    // Waits until the next list of the ring is free and opens it for recording. Returns its
+    // native handle (ID3D12GraphicsCommandList* or VkCommandBuffer), or 0 if it cannot be
+    // opened.
+    virtual uint64_t begin() = 0;
+    // Records on the open list that `res` goes from state `before` to `after`.
+    virtual void transition(resource res, resource_usage before, resource_usage after) = 0;
+    // Closes the open list and submits it to the queue. Returns false if that fails.
+    virtual bool submit() = 0;
+};
+
+// Direct3D 12: command allocators (the memory a command list records into) used in turn
+// with one command list, and a fence (a counter the GPU sets when it reaches a point in the
+// queue) that tells when the GPU has finished each allocator's list.
+struct FrameRenderer::D3D12Commands final : FrameRenderer::PrivateCommands
+{
+    ID3D12CommandQueue *queue = nullptr; // not owned
+    ID3D12CommandAllocator *allocators[kFramesInFlight] = {};
+    UINT64 finished_at[kFramesInFlight] = {}; // fence value after the last list recorded with each
     ID3D12GraphicsCommandList *list = nullptr;
     ID3D12Fence *fence = nullptr;
     UINT64 fence_value = 0;
     HANDLE event = nullptr;
     int current = 0;
 
-    // Creates everything on `device`. Returns false if anything cannot be created.
-    bool create(ID3D12Device *device)
+    // Creates everything on `device`, submitting to `q`. Returns false if anything cannot
+    // be created.
+    bool create(ID3D12Device *device, ID3D12CommandQueue *q)
     {
+        queue = q;
         for (ID3D12CommandAllocator *&a : allocators)
             if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&a))))
                 return false;
@@ -48,8 +71,52 @@ struct FrameRenderer::PrivateCommands
         }
     }
 
-    // Waits until the GPU has finished every list submitted, then releases everything.
-    ~PrivateCommands()
+    uint64_t begin() override
+    {
+        wait_for(finished_at[current]);
+        if (FAILED(allocators[current]->Reset()) || FAILED(list->Reset(allocators[current], nullptr)))
+            return 0;
+        return reinterpret_cast<uint64_t>(list);
+    }
+
+    // ReShade's resource states as Direct3D 12 states (only those the renderer uses).
+    static D3D12_RESOURCE_STATES state(resource_usage usage)
+    {
+        switch (usage)
+        {
+        case resource_usage::render_target:
+            return D3D12_RESOURCE_STATE_RENDER_TARGET;
+        case resource_usage::copy_source:
+            return D3D12_RESOURCE_STATE_COPY_SOURCE;
+        default: // shader_resource, as ReShade maps it
+            return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        }
+    }
+
+    void transition(resource res, resource_usage before, resource_usage after) override
+    {
+        D3D12_RESOURCE_BARRIER b = {};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = reinterpret_cast<ID3D12Resource *>(res.handle);
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        b.Transition.StateBefore = state(before);
+        b.Transition.StateAfter = state(after);
+        list->ResourceBarrier(1, &b);
+    }
+
+    bool submit() override
+    {
+        if (FAILED(list->Close()))
+            return false;
+        ID3D12CommandList *lists[] = {list};
+        queue->ExecuteCommandLists(1, lists);
+        queue->Signal(fence, ++fence_value);
+        finished_at[current] = fence_value;
+        current = (current + 1) % kFramesInFlight;
+        return true;
+    }
+
+    ~D3D12Commands() override
     {
         wait_for(fence_value);
         if (list != nullptr)
@@ -64,7 +131,145 @@ struct FrameRenderer::PrivateCommands
     }
 };
 
-// Defined here, where PrivateCommands is complete (it is only declared in the header).
+// Vulkan: command buffers from one command pool, used in turn, each with a fence the GPU
+// signals when it has finished that buffer. Created through the Vulkan loader, so ReShade's
+// layer registers the buffers like the game's (see frame_renderer.h).
+struct FrameRenderer::VulkanCommands final : FrameRenderer::PrivateCommands
+{
+    VulkanFunctions vk;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue queue = VK_NULL_HANDLE;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer buffers[kFramesInFlight] = {};
+    VkFence fences[kFramesInFlight] = {};
+    // pending[i]: buffers[i] was submitted and fences[i] will be signalled when the GPU has
+    // finished it; the fence has not been waited for yet.
+    bool pending[kFramesInFlight] = {};
+    int current = 0;
+
+    // Waits until the GPU has finished buffers[i] if it was submitted, and resets its fence
+    // for the next submission. Returns false if Vulkan reports an error (device lost).
+    bool finish(int i)
+    {
+        if (!pending[i])
+            return true;
+        pending[i] = false;
+        return vk.WaitForFences(device, 1, &fences[i], VK_TRUE, UINT64_MAX) == VK_SUCCESS &&
+               vk.ResetFences(device, 1, &fences[i]) == VK_SUCCESS;
+    }
+
+    // Creates the pool (on the game's queue family), buffers and fences for the device and
+    // queue in `chain`. Returns false if anything cannot be created.
+    bool create(const ChainDevice &chain)
+    {
+        device = reinterpret_cast<VkDevice>(chain.device);
+        queue = reinterpret_cast<VkQueue>(chain.queue);
+        if (!vk.load(device, chain.get_device_proc_addr))
+            return false;
+        VkCommandPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pool_info.queueFamilyIndex = chain.queue_family;
+        if (vk.CreateCommandPool(device, &pool_info, nullptr, &pool) != VK_SUCCESS)
+            return false;
+        VkCommandBufferAllocateInfo alloc = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        alloc.commandPool = pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = kFramesInFlight;
+        if (vk.AllocateCommandBuffers(device, &alloc, buffers) != VK_SUCCESS)
+            return false;
+        const VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        for (VkFence &f : fences)
+            if (vk.CreateFence(device, &fence_info, nullptr, &f) != VK_SUCCESS)
+                return false;
+        return true;
+    }
+
+    // Records a barrier making everything written before it on the queue visible to
+    // everything after it (all stages, all memory). At the start of a buffer it covers
+    // ReShade's commands submitted just before (the snapshot copy); at the end, ReShade's
+    // commands submitted after (the copy of the result into the frame). Barriers reach
+    // across submissions on the same queue, so no ReShade barrier is relied on.
+    void full_barrier()
+    {
+        VkMemoryBarrier b = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vk.CmdPipelineBarrier(buffers[current], VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                              0, 1, &b, 0, nullptr, 0, nullptr);
+    }
+
+    uint64_t begin() override
+    {
+        if (!finish(current) || vk.ResetCommandBuffer(buffers[current], 0) != VK_SUCCESS)
+            return 0;
+        VkCommandBufferBeginInfo begin_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (vk.BeginCommandBuffer(buffers[current], &begin_info) != VK_SUCCESS)
+            return 0;
+        full_barrier();
+        return reinterpret_cast<uint64_t>(buffers[current]);
+    }
+
+    // The image layout ReShade uses for each state the renderer uses (ReShade 6.8's
+    // convert_usage_to_image_layout), so that ReShade's barriers and these agree.
+    static VkImageLayout layout(resource_usage usage)
+    {
+        switch (usage)
+        {
+        case resource_usage::render_target:
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        case resource_usage::copy_source:
+            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        default: // shader_resource
+            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+    }
+
+    // Changes the image's layout, waiting for all earlier work (all stages, all memory):
+    // simple and always correct; a few barriers per frame cost nothing noticeable.
+    void transition(resource res, resource_usage before, resource_usage after) override
+    {
+        VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        b.oldLayout = layout(before);
+        b.newLayout = layout(after);
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = reinterpret_cast<VkImage>(res.handle);
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        vk.CmdPipelineBarrier(buffers[current], VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                              0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+
+    bool submit() override
+    {
+        full_barrier();
+        VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &buffers[current];
+        const bool ok = vk.EndCommandBuffer(buffers[current]) == VK_SUCCESS &&
+                        vk.QueueSubmit(queue, 1, &submit_info, fences[current]) == VK_SUCCESS;
+        pending[current] = ok;
+        current = (current + 1) % kFramesInFlight;
+        return ok;
+    }
+
+    ~VulkanCommands() override
+    {
+        if (vk.DestroyFence == nullptr)
+            return; // load() failed: nothing was created
+        for (int i = 0; i < int(kFramesInFlight); ++i)
+            if (fences[i] != VK_NULL_HANDLE)
+            {
+                finish(i);
+                vk.DestroyFence(device, fences[i], nullptr);
+            }
+        if (pool != VK_NULL_HANDLE)
+            vk.DestroyCommandPool(device, pool, nullptr); // also frees the buffers
+    }
+};
+
+// Defined here, where the command rings are complete (they are only declared in the header).
 FrameRenderer::FrameRenderer() = default;
 
 FrameRenderer::~FrameRenderer()
@@ -72,7 +277,7 @@ FrameRenderer::~FrameRenderer()
     shutdown();
 }
 
-bool FrameRenderer::chain_device(device *dev, ChainDevice &out, std::string &error)
+bool FrameRenderer::chain_device(device *dev, command_queue *queue, ChainDevice &out, std::string &error)
 {
     switch (dev->get_api())
     {
@@ -89,8 +294,25 @@ bool FrameRenderer::chain_device(device *dev, ChainDevice &out, std::string &err
         out = {GraphicsApi::opengl, dev->get_native()};
         break;
     case device_api::vulkan:
+    {
+        // librashader also needs objects ReShade does not give add-ons (vulkan_support.h).
+        uint8_t luid[8] = {};
+        const bool has_luid = dev->get_property(device_properties::adapter_luid, luid);
+        VulkanHandles vh;
+        if (!vulkan_handles(has_luid ? luid : nullptr, uint32_t(queue->get_type()), vh, error))
+        {
+            error = "Vulkan: " + error;
+            return false;
+        }
         out = {GraphicsApi::vulkan, dev->get_native()};
+        out.instance = vh.instance;
+        out.physical_device = vh.physical_device;
+        out.queue = queue->get_native();
+        out.queue_family = vh.queue_family;
+        out.get_instance_proc_addr = vh.get_instance_proc_addr;
+        out.get_device_proc_addr = vh.get_device_proc_addr;
         break;
+    }
     default: // Direct3D 10: librashader has no runtime for it
         error = "Direct3D 10 is not supported (librashader cannot run on it).";
         return false;
@@ -118,12 +340,13 @@ bool FrameRenderer::supported_format(format f)
     }
 }
 
-bool FrameRenderer::init(device *dev, std::string &error)
+bool FrameRenderer::init(device *dev, command_queue *queue, std::string &error)
 {
     shutdown();
-    if (!chain_device(dev, chain_device_, error))
+    if (!chain_device(dev, queue, chain_device_, error))
         return false;
     device_ = dev;
+    queue_ = queue;
     const std::string preset = capture_preset_path(chain_device_.api == GraphicsApi::d3d9, error);
     if (preset.empty() || !capture_.create(chain_device_, preset, error))
     {
@@ -134,12 +357,18 @@ bool FrameRenderer::init(device *dev, std::string &error)
     return true;
 }
 
+void FrameRenderer::wait_idle()
+{
+    if (queue_ != nullptr)
+        queue_->wait_idle();
+}
+
 void FrameRenderer::shutdown()
 {
     // The GPU may still be using the textures and compiled presets: wait for it first.
-    if (queue_ != nullptr)
-        queue_->wait_idle();
+    wait_idle();
     private_.reset();
+    private_open_ = false;
     queue_ = nullptr;
     capture_.destroy();
     capture_grid_ = PixelGrid();
@@ -179,6 +408,25 @@ ChainImage FrameRenderer::chain_image(resource res, resource_view view, format f
         if (format_to_default_typed(fmt, 0) == format::r10g10b10a2_unorm)
             gl_format = 0x8059; // GL_RGB10_A2
         return ChainImage{view.handle & 0xFFFFFFFF, view.handle, gl_format, width, height};
+    }
+    if (chain_device_.api == GraphicsApi::vulkan)
+    {
+        // ReShade's Vulkan handles are the VkImage itself. librashader wants the VkFormat,
+        // as ReShade 6.8 maps these formats (convert_format).
+        VkFormat vk_format = VK_FORMAT_R8G8B8A8_UNORM;
+        switch (format_to_default_typed(fmt, 0))
+        {
+        case format::b8g8r8a8_unorm:
+        case format::b8g8r8x8_unorm:
+            vk_format = VK_FORMAT_B8G8R8A8_UNORM;
+            break;
+        case format::r10g10b10a2_unorm:
+            vk_format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+            break;
+        default: // r8g8b8a8_unorm
+            break;
+        }
+        return ChainImage{res.handle, view.handle, uint32_t(vk_format), width, height};
     }
     // Direct3D 11 takes views; Direct3D 12 the resource, a descriptor and the format;
     // Direct3D 9 the input texture and the output's render target surface (the view).
@@ -294,7 +542,8 @@ bool FrameRenderer::snapshot(command_list *cmd, resource frame, std::string &err
 
 bool FrameRenderer::begin_librashader(command_list *cmd, command_queue *queue, uint64_t &commands, std::string &error)
 {
-    if (chain_device_.api != GraphicsApi::d3d12)
+    const GraphicsApi api = chain_device_.api;
+    if (api != GraphicsApi::d3d12 && api != GraphicsApi::vulkan)
     {
         commands = cmd->get_native();
         return true;
@@ -303,74 +552,67 @@ bool FrameRenderer::begin_librashader(command_list *cmd, command_queue *queue, u
     // commands; work recorded on another list would end up out of order.
     if (cmd != queue->get_immediate_command_list())
     {
-        error = "effects are being rendered on another add-on's command list, which is not supported on Direct3D 12";
+        error = "effects are being rendered on another add-on's command list, which is not supported on "
+                "Direct3D 12 and Vulkan";
         return false;
     }
     if (private_ == nullptr)
     {
-        private_ = std::make_unique<PrivateCommands>();
-        if (!private_->create(reinterpret_cast<ID3D12Device *>(device_->get_native())))
+        bool ok = false;
+        if (api == GraphicsApi::d3d12)
+        {
+            auto p = std::make_unique<D3D12Commands>();
+            ok = p->create(reinterpret_cast<ID3D12Device *>(device_->get_native()),
+                           reinterpret_cast<ID3D12CommandQueue *>(queue->get_native()));
+            private_ = std::move(p);
+        }
+        else
+        {
+            auto p = std::make_unique<VulkanCommands>();
+            ok = p->create(chain_device_);
+            private_ = std::move(p);
+        }
+        if (!ok)
         {
             private_.reset();
-            error = "could not create a Direct3D 12 command list";
+            error = "could not create a private command list";
             return false;
         }
     }
     // ReShade's commands so far (the snapshot, the barriers) run first.
     queue->flush_immediate_command_list();
-    PrivateCommands &p = *private_;
-    p.wait_for(p.finished_at[p.current]);
-    p.allocators[p.current]->Reset();
-    p.list->Reset(p.allocators[p.current], nullptr);
-    commands = reinterpret_cast<uint64_t>(p.list);
+    commands = private_->begin();
+    if (commands == 0)
+    {
+        error = "could not open a private command list";
+        return false;
+    }
+    private_open_ = true;
     return true;
 }
 
-void FrameRenderer::end_librashader(command_queue *queue)
+bool FrameRenderer::end_librashader(std::string &error)
 {
-    if (chain_device_.api != GraphicsApi::d3d12 || private_ == nullptr)
-        return;
-    PrivateCommands &p = *private_;
-    p.list->Close();
-    ID3D12CommandQueue *q = reinterpret_cast<ID3D12CommandQueue *>(queue->get_native());
-    ID3D12CommandList *lists[] = {p.list};
-    q->ExecuteCommandLists(1, lists);
-    q->Signal(p.fence, ++p.fence_value);
-    p.finished_at[p.current] = p.fence_value;
-    p.current = (p.current + 1) % PrivateCommands::kAllocators;
-}
-
-// ReShade's resource states as Direct3D 12 states (only those the renderer uses).
-static D3D12_RESOURCE_STATES d3d12_state(resource_usage usage)
-{
-    switch (usage)
+    if (!private_open_)
+        return true;
+    private_open_ = false;
+    if (!private_->submit())
     {
-    case resource_usage::render_target:
-        return D3D12_RESOURCE_STATE_RENDER_TARGET;
-    case resource_usage::copy_source:
-        return D3D12_RESOURCE_STATE_COPY_SOURCE;
-    default: // shader_resource, as ReShade maps it
-        return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        error = "could not submit the private command list";
+        return false;
     }
+    return true;
 }
 
-void FrameRenderer::transition(uint64_t commands, resource res, resource_usage before, resource_usage after)
+void FrameRenderer::transition(resource res, resource_usage before, resource_usage after)
 {
-    if (chain_device_.api != GraphicsApi::d3d12)
-        return;
-    D3D12_RESOURCE_BARRIER b = {};
-    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition.pResource = reinterpret_cast<ID3D12Resource *>(res.handle);
-    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    b.Transition.StateBefore = d3d12_state(before);
-    b.Transition.StateAfter = d3d12_state(after);
-    reinterpret_cast<ID3D12GraphicsCommandList *>(commands)->ResourceBarrier(1, &b);
+    if (private_open_)
+        private_->transition(res, before, after);
 }
 
 bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelGrid &grid, ShaderChain &chain,
                            resource dst, uint64_t frame_count, std::string &error)
 {
-    queue_ = queue;
     // Refuse to run without a snapshot or a valid grid, or with a grid whose rectangle
     // reaches outside the snapshot.
     if (snap_.handle == 0 || !grid.valid)
@@ -410,7 +652,7 @@ bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelG
                              chain_image(snap_, snap_srv_, format_to_default_typed(snap_format_, 0), snap_w_, snap_h_),
                              chain_image(native_, native_rtv_, native_format(), nw, nh), 0, 0, int(nw), int(nh),
                              frame_count, error);
-    transition(commands, native_, resource_usage::render_target, resource_usage::shader_resource);
+    transition(native_, resource_usage::render_target, resource_usage::shader_resource);
 
     // Step 2: run the user's preset on the native picture, into out_, which is exactly the
     // size of the rectangle (librashader clears its whole output, so drawing straight into
@@ -418,8 +660,15 @@ bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelG
     ok = ok && chain.frame(commands, chain_image(native_, native_srv_, native_format(), nw, nh),
                            chain_image(out_, out_rtv_, format_to_default_typed(dst_format, 0), rw, rh), 0, 0, int(rw),
                            int(rh), frame_count, error);
-    transition(commands, out_, resource_usage::render_target, resource_usage::copy_source);
-    end_librashader(queue);
+    transition(out_, resource_usage::render_target, resource_usage::copy_source);
+    // Submit even after a failure: the list is open, and the transitions above must run
+    // for the states to be what the next frame expects.
+    std::string submit_error;
+    if (!end_librashader(submit_error) && ok)
+    {
+        error = submit_error;
+        ok = false;
+    }
     if (!ok)
         return false;
 

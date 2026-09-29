@@ -27,11 +27,18 @@
 // the shader_resource state and the output texture in copy_source; the frame is expected
 // in render_target (as during ReShade's effect rendering) and left there.
 //
-// Where librashader records its work: on Direct3D 11, straight on ReShade's command list
-// (ReShade restores the game's state afterwards). On Direct3D 12, on a private command
-// list submitted to the same queue right after ReShade's pending commands, because
-// librashader binds its own descriptor heaps and ReShade assumes its own stay bound on
-// its command list.
+// Where librashader records its work:
+//  - Direct3D 11, Direct3D 9 and OpenGL: straight on ReShade's command list (on Direct3D 11
+//    ReShade restores the game's state afterwards).
+//  - Direct3D 12 and Vulkan: on a private command list (a Vulkan command buffer), submitted
+//    to the same queue right after ReShade's pending commands. On Direct3D 12 because
+//    librashader binds its own descriptor heaps, and ReShade (6.8) assumes its own stay
+//    bound on its command list. On Vulkan because librashader's calls go through ReShade's
+//    Vulkan layer like the game's, and ReShade (6.8) does not register its own command
+//    buffers with that layer: commands recorded on them would reach other add-ons'
+//    handlers with no command list (a crash in ReShade's built-in depth add-on, for one).
+//    The private lists are used in turn from a ring of kFramesInFlight (chain.h), each
+//    reused only once the GPU has finished it, which is what librashader needs.
 //
 // Owns its textures, recreates them when sizes or formats change, and releases them in
 // shutdown() or the destructor (after the GPU has finished with them). Not thread-safe:
@@ -44,17 +51,25 @@ public:
     FrameRenderer &operator=(const FrameRenderer &) = delete;
     ~FrameRenderer(); // calls shutdown()
 
-    // Fills `out` with what librashader needs to know about `device` (its API and native
-    // device). Returns false and sets `error` (a message for the user) when the device's
-    // graphics API is not supported (yet).
-    static bool chain_device(reshade::api::device *device, ChainDevice &out, std::string &error);
+    // Fills `out` with what librashader needs to know about `device` and `queue`, the queue
+    // the add-on renders on (its API, native device, and on Vulkan the objects of
+    // vulkan_support.h). Returns false and sets `error` (a message for the user) when the
+    // device's graphics API is not supported (yet) or, on Vulkan, those objects cannot be
+    // found.
+    static bool chain_device(reshade::api::device *device, reshade::api::command_queue *queue, ChainDevice &out,
+                             std::string &error);
 
-    // Prepares the renderer for `device`: loads the capture preset for its graphics API.
-    // librashader must already be loaded (librashader_api.h). Releases anything from an
-    // earlier init() first. Returns false and sets `error` on failure.
-    bool init(reshade::api::device *device, std::string &error);
+    // Prepares the renderer for `device`, rendering on `queue`: loads the capture preset
+    // for its graphics API. librashader must already be loaded (librashader_api.h).
+    // Releases anything from an earlier init() first. Returns false and sets `error` on
+    // failure.
+    bool init(reshade::api::device *device, reshade::api::command_queue *queue, std::string &error);
     // Releases every GPU object and forgets the device. Safe to call more than once.
     void shutdown();
+    // Waits until the GPU has finished all work submitted to the renderer's queue. Call it
+    // before destroying or replacing a ShaderChain the renderer has drawn with: Direct3D 12
+    // and Vulkan free a chain's objects at once, even if the GPU is still using them.
+    void wait_idle();
 
     // Copies `frame` (the texture the game's picture is in, normally the back buffer; in
     // the render_target state) into the snapshot, recording the commands on `cmd`.
@@ -69,8 +84,8 @@ public:
     // `grid` from the last snapshot, runs `chain` on it into a texture the size of grid's
     // rectangle, and copies that into `dst` at the rectangle's position. `frame_count` is
     // the frame number the shaders see; it should go up by one each frame. Records the
-    // commands on `cmd`, which must be `queue`'s immediate command list (see the class
-    // comment for Direct3D 12). Returns false and sets `error` when there is no snapshot,
+    // commands on `cmd`, which must be `queue`'s immediate command list on Direct3D 12 and
+    // Vulkan (see the class comment). Returns false and sets `error` when there is no snapshot,
     // `grid` is invalid or reaches outside the snapshot, or a texture or a preset fails.
     bool render(reshade::api::command_list *cmd, reshade::api::command_queue *queue, const PixelGrid &grid,
                 ShaderChain &chain, reshade::api::resource dst, uint64_t frame_count, std::string &error);
@@ -104,24 +119,32 @@ private:
     void destroy(reshade::api::resource &res, reshade::api::resource_view &view1, reshade::api::resource_view &view2);
 
     // Returns, in `commands`, the native command recorder librashader should use this
-    // frame (see the class comment): ReShade's list on Direct3D 11; on Direct3D 12 it first
-    // submits ReShade's pending commands, then opens the private list. Returns false and
-    // sets `error` if the private list cannot be created.
+    // frame (see the class comment): the native object of ReShade's list on Direct3D 11, 9
+    // and OpenGL; on Direct3D 12 and Vulkan it first submits ReShade's pending commands,
+    // then waits until the next private list of the ring is free and opens it. Returns
+    // false and sets `error` if `cmd` is not `queue`'s immediate list there, or the private
+    // list cannot be created or opened.
     bool begin_librashader(reshade::api::command_list *cmd, reshade::api::command_queue *queue, uint64_t &commands,
                            std::string &error);
-    // Submits the private list on Direct3D 12 (after begin_librashader); nothing elsewhere.
-    void end_librashader(reshade::api::command_queue *queue);
-    // Records, on `commands` (from begin_librashader), that `res` goes from `before` to
-    // `after`. Needed on Direct3D 12's private list, where ReShade's barrier() cannot be
-    // used; a no-op on Direct3D 11.
-    void transition(uint64_t commands, reshade::api::resource res, reshade::api::resource_usage before,
+    // Closes and submits the private list opened by begin_librashader; nothing on the other
+    // APIs. Returns false and sets `error` if it cannot be submitted.
+    bool end_librashader(std::string &error);
+    // Records on the private list opened by begin_librashader that `res` goes from `before`
+    // to `after` (ReShade's barrier() records on ReShade's list, not on it). Nothing on the
+    // APIs without a private list, which need no transitions there.
+    void transition(reshade::api::resource res, reshade::api::resource_usage before,
                     reshade::api::resource_usage after);
 
-    // The private Direct3D 12 command list and what keeps it safe to reuse (defined in the
-    // .cpp file, so this header does not need Direct3D 12's).
+    // The ring of private command lists (Direct3D 12) or command buffers (Vulkan), with
+    // what keeps them safe to reuse; created on first use. Defined in the .cpp file, so
+    // this header does not need Direct3D 12's or Vulkan's.
     struct PrivateCommands;
+    struct D3D12Commands;
+    struct VulkanCommands;
     std::unique_ptr<PrivateCommands> private_;
-    // The queue of the last render(), to wait for the GPU before releasing textures.
+    bool private_open_ = false; // begin_librashader opened a private list not yet submitted
+    // The queue the renderer renders on (from init()), to wait for the GPU before releasing
+    // textures and chains.
     reshade::api::command_queue *queue_ = nullptr;
 
     reshade::api::device *device_ = nullptr; // from init(); not owned

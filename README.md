@@ -1,7 +1,7 @@
 # RetroArch Shaders for ReShade
 
 A ReShade add-on that runs **unmodified RetroArch shader presets** (`.slangp`) on
-Direct3D 11, Direct3D 12 and OpenGL games, through
+Direct3D 11, Direct3D 12, OpenGL and Vulkan games, through
 [librashader](https://github.com/SnowflakePowered/librashader).
 
 Re-releases of old games usually scale a low-resolution picture up to your screen. A CRT
@@ -122,11 +122,17 @@ The RetroArch Shaders window and `ReShade.log` say what is happening.
 | `HDR output is not supported yet` | Turn the game's HDR option off. |
 | `Direct3D 12 needs dxcompiler.dll and dxil.dll` | Add Microsoft's DirectX Shader Compiler: step 4 of [Install](#install). |
 | `... is not supported yet` | The game uses a graphics API the add-on does not support yet (see Limitations). |
+| `Vulkan: could not find ...` or `Vulkan: cannot tell ...` | The add-on could not find what it needs on the game's GPU (see Limitations). Please report it with `ReShade.log`. |
 
 ## Limitations
 
-- Direct3D 11, Direct3D 12 and OpenGL. Vulkan is not supported yet. Direct3D 10 cannot be
+- Direct3D 11, Direct3D 12, OpenGL and Vulkan. Direct3D 10 cannot be supported
   (librashader has no Direct3D 10 support).
+- Vulkan relies on a workaround: ReShade does not give add-ons the game's Vulkan instance
+  and GPU object, which librashader needs, so the add-on makes its own and matches the
+  GPU. If it cannot match the GPU or the game's queue, it leaves the game untouched and
+  says why. Games that draw their final picture on a different GPU queue from the one
+  they show it with (a few recent games do) may not work correctly.
 - Direct3D 9 is experimental: the add-on works, but librashader's Direct3D 9 support is
   limited to shaders that fit Direct3D 9's old shader model, and the CRT presets tried so
   far (crt-royale, crt-geom, zfast-crt) do not run on it; the picture is then left
@@ -157,6 +163,10 @@ fetches the pinned `librashader.dll`.
 | `out/build/files_test`, `out/build/params_test` | Preset files, discovery, saving parameters. |
 | `python tests/e2e.py ...` | The add-on inside real ReShade (needs a GPU). |
 | `python tests/compat_sweep.py ...` | Loads every preset in a shader folder. |
+
+[docs/assumptions.md](docs/assumptions.md) lists what the add-on relies on in ReShade,
+librashader and the graphics APIs beyond what they document, and how each is checked.
+Re-run the end-to-end tests on every API after updating ReShade or librashader.
 
 ## Licence
 

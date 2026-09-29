@@ -1,5 +1,10 @@
 #pragma once
 
+#ifndef VK_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES // Vulkan functions are looked up at run time, never linked
+#endif
+#include <vulkan/vulkan.h>
+
 #include <d3d9.h>
 #include <d3d11.h>
 #include <d3d12.h>
@@ -10,6 +15,7 @@
 #define LIBRA_RUNTIME_D3D11
 #define LIBRA_RUNTIME_D3D12
 #define LIBRA_RUNTIME_OPENGL
+#define LIBRA_RUNTIME_VULKAN
 #include "librashader_ld.h"
 
 // librashader, loaded at runtime from a known location (next to the add-on), so a

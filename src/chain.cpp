@@ -5,6 +5,7 @@
 
 #include "chain.h"
 #include "librashader_api.h"
+#include "vulkan_support.h"
 
 #include <cmath>
 
@@ -90,7 +91,7 @@ std::vector<std::pair<std::string, float>> param_overrides(const std::vector<Sha
 bool ShaderChain::supports(GraphicsApi api)
 {
     return api == GraphicsApi::d3d9 || api == GraphicsApi::d3d11 || api == GraphicsApi::d3d12 ||
-           api == GraphicsApi::opengl;
+           api == GraphicsApi::opengl || api == GraphicsApi::vulkan;
 }
 
 // Finds an OpenGL function for librashader: wglGetProcAddress knows the functions added
@@ -203,8 +204,57 @@ bool ShaderChain::create(const ChainDevice &device, const std::string &preset_pa
     {
         filter_chain_d3d12_opt_t opt = {};
         opt.version = LIBRASHADER_CURRENT_VERSION;
+        opt.frames_in_flight = kFramesInFlight;
         libra_d3d12_filter_chain_t c = nullptr;
         err = api.d3d12_filter_chain_create(&preset, reinterpret_cast<ID3D12Device *>(device.device), &opt, &c);
+        chain = c;
+        break;
+    }
+    case GraphicsApi::vulkan:
+    {
+        libra_device_vk_t vk = {};
+        vk.physical_device = reinterpret_cast<VkPhysicalDevice>(device.physical_device);
+        vk.instance = reinterpret_cast<VkInstance>(device.instance);
+        vk.device = reinterpret_cast<VkDevice>(device.device);
+        vk.queue = reinterpret_cast<VkQueue>(device.queue);
+        vk.entry = reinterpret_cast<PFN_vkGetInstanceProcAddr>(device.get_instance_proc_addr);
+        filter_chain_vk_opt_t opt = {};
+        opt.version = LIBRASHADER_CURRENT_VERSION;
+        opt.frames_in_flight = kFramesInFlight;
+        // The "deferred" create records the chain's GPU setup (uploading its look-up
+        // textures) into a command buffer given here, run on the game's queue family.
+        // (librashader's plain create makes its own command pool, always for queue family
+        // 0, which is not necessarily the family of the game's queue.)
+        VulkanFunctions vkf;
+        if (!vkf.load(vk.device, device.get_device_proc_addr))
+        {
+            api.preset_free(&preset);
+            error = "Vulkan functions could not be loaded";
+            params_.clear();
+            return false;
+        }
+        libra_vk_filter_chain_t c = nullptr;
+        std::string setup_error;
+        const bool setup_ok = vulkan_run_once(
+            vkf, vk.device, vk.queue, device.queue_family,
+            [&](VkCommandBuffer cmd) {
+                err = api.vk_filter_chain_create_deferred(&preset, vk, cmd, &opt, &c);
+                if (err != nullptr)
+                    setup_error = "librashader could not create the chain";
+                return err == nullptr;
+            },
+            setup_error);
+        if (!setup_ok && err == nullptr)
+        {
+            // The chain was made but its setup never ran on the GPU: it cannot be used.
+            if (c != nullptr)
+                api.vk_filter_chain_free(&c);
+            if (preset != nullptr)
+                api.preset_free(&preset);
+            error = setup_error;
+            params_.clear();
+            return false;
+        }
         chain = c;
         break;
     }
@@ -275,6 +325,12 @@ void ShaderChain::destroy()
             libra::api().d3d9_filter_chain_free(&chain);
             break;
         }
+        case GraphicsApi::vulkan:
+        {
+            libra_vk_filter_chain_t chain = static_cast<libra_vk_filter_chain_t>(chain_);
+            libra::api().vk_filter_chain_free(&chain);
+            break;
+        }
         default:
             break;
         }
@@ -339,6 +395,18 @@ bool ShaderChain::frame(uint64_t commands, const ChainImage &input, const ChainI
         err = libra::api().gl_filter_chain_frame(&chain, size_t(frame_count), in, out, &viewport, nullptr, &opt);
         break;
     }
+    case GraphicsApi::vulkan:
+    {
+        const frame_vk_opt_t opt = frame_options<frame_vk_opt_t>();
+        const libra_image_vk_t in = {reinterpret_cast<VkImage>(input.resource), VkFormat(input.format), input.width,
+                                     input.height};
+        const libra_image_vk_t out = {reinterpret_cast<VkImage>(output.resource), VkFormat(output.format),
+                                      output.width, output.height};
+        libra_vk_filter_chain_t chain = static_cast<libra_vk_filter_chain_t>(chain_);
+        err = libra::api().vk_filter_chain_frame(&chain, reinterpret_cast<VkCommandBuffer>(commands),
+                                                 size_t(frame_count), in, out, &viewport, nullptr, &opt);
+        break;
+    }
     case GraphicsApi::d3d9:
     {
         const frame_d3d9_opt_t opt = frame_options<frame_d3d9_opt_t>();
@@ -393,6 +461,12 @@ bool ShaderChain::set_param(const std::string &name, float value, std::string &e
     {
         libra_d3d9_filter_chain_t chain = static_cast<libra_d3d9_filter_chain_t>(chain_);
         err = libra::api().d3d9_filter_chain_set_param(&chain, name.c_str(), value);
+        break;
+    }
+    case GraphicsApi::vulkan:
+    {
+        libra_vk_filter_chain_t chain = static_cast<libra_vk_filter_chain_t>(chain_);
+        err = libra::api().vk_filter_chain_set_param(&chain, name.c_str(), value);
         break;
     }
     default:
