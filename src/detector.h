@@ -2,10 +2,11 @@
 // GridDetector keeps the game's pixel grid (where its low-resolution picture sits in the
 // frame and at what resolution; see PixelGrid in grid_detect.h) up to date while the game
 // runs, without slowing rendering down. It copies a frame back from the GPU now and then,
-// runs detect_grid() on a worker thread, and replaces the grid in use with a result only
-// when the rules below allow it. The add-on (addon.cpp) has one per swap chain, ticks it every frame, and hands
-// grid() to the renderer, which uses it to rebuild the game's small picture. GPU work goes
-// through ReShade's API, so it works on every graphics API ReShade supports.
+// runs detect_grid() on a worker thread, and replaces the grid in use with a result only in
+// the cases listed below. The add-on (addon.cpp) has one per swap chain, ticks it every
+// frame, and passes grid() to the renderer, which uses it to rebuild the game's small
+// picture. GPU work goes through ReShade's API, so it works on every graphics API ReShade
+// supports.
 
 #include "grid_detect.h"
 
@@ -19,16 +20,16 @@
 // Keeps track of the game's native pixel grid while it runs.
 //
 // How a detection runs: tick() copies the frame into a readback texture (a texture whose
-// memory the CPU is allowed to read), on later frames checks without waiting whether the
-// GPU has finished that copy (with a fence: a marker the GPU reaches after the copy), and
-// then hands the copied pixels to a worker thread that runs detect_grid(). So the render
+// memory the CPU can read), on later frames checks without waiting whether the GPU has
+// finished that copy (with a fence: a value the GPU signals after the copy), and then
+// passes the copied pixels to a worker thread that runs detect_grid(). So the render
 // thread never waits for the GPU or for detection (except where ReShade cannot make a
-// fence: then tick() waits for the GPU right after queueing the copy). A new copy
-// starts 1 second after the previous one while a confirmed grid is known, and 0.25 seconds
-// after it while there is none.
+// fence: then tick() waits for the GPU right after queueing the copy). A new copy starts
+// 1 second after the previous one while there is a confirmed grid, and 0.25 seconds after
+// it while there is none.
 //
 // Which results are used. The grid in use changes only when:
-//  - two valid detections in a row agree on a new grid (resolution or mode switches),
+//  - two valid detections in a row return the same new grid (resolution or mode switches),
 //  - or there is no confirmed grid (none yet, or a provisional one after a resize, see
 //    below): the first valid detection is used immediately,
 //  - or the grid in use is not `bounded` (it may be only part of the picture, e.g. the
@@ -50,7 +51,7 @@ public:
     GridDetector &operator=(const GridDetector &) = delete;
 
     // Advances detection by one step; call it every frame while automatic detection is on.
-    // Depending on where the current detection is, it starts a copy of `frame`, hands a
+    // Depending on where the current detection is, it starts a copy of `frame`, passes a
     // finished copy to the worker, or collects the worker's result and updates grid().
     // `frame` holds the game's frame; it must be single-sample (not multisampled), 4 bytes
     // per pixel, and in the shader_resource state. The add-on passes its snapshot, a copy
@@ -61,11 +62,11 @@ public:
               double now);
 
     // Releases GPU resources, first waiting for a detection that is still reading them.
-    // Must be called on the render thread before `device` goes away. The grid is kept, so
-    // that after a swap chain resize the next tick() rescales it.
+    // Must be called on the render thread before `device` is destroyed. The grid is kept,
+    // so that after a swap chain resize the next tick() rescales it.
     void shutdown(reshade::api::device *device);
 
-    // Forgets the current grid and detects again as soon as possible. A detection already
+    // Clears the current grid and detects again as soon as possible. A detection already
     // under way finishes, but its result is thrown away.
     void redetect();
 
@@ -90,8 +91,8 @@ private:
     // Body of the worker thread: waits for a frame, runs detect_grid() on it, stores the
     // result, and repeats until quit_ is set.
     void worker_main();
-    // Replaces the grid in use with one detection result if the rules in the class comment
-    // allow it, and keeps `log` for status().
+    // Replaces the grid in use with one detection result in the cases listed in the class
+    // comment, and keeps `log` for status().
     void consume(const PixelGrid &result, const std::string &log);
     // Makes sure readback_ exists with the width, height and format of `desc`, recreating
     // it if not, and tries once to create fence_. Returns false if readback_ could not be
@@ -134,7 +135,7 @@ private:
     unsigned generation_ = 0, copy_generation_ = 0;
     // Time (seconds) the last copy started; -1e9 means "long ago", so the next tick() copies.
     double last_request_ = -1e9;
-    // Frame size seen by the last tick(), to notice size changes.
+    // Frame size at the last tick(), to detect size changes.
     int frame_w_ = 0, frame_h_ = 0;
 
     PixelGrid grid_;          // in use

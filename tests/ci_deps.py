@@ -55,7 +55,8 @@ def download(url, folder, expected_sha256=None):
     path = os.path.join(folder, url.rsplit("/", 1)[1])
     if not os.path.exists(path):
         print(f"downloading {url}", flush=True)
-        # reshade.me refuses Python's default User-Agent, so the requests name this project.
+        # reshade.me answers 403 to Python's default User-Agent, so the requests send this
+        # project's name instead.
         request = urllib.request.Request(url, headers={"User-Agent": "reshade-retroarch-tests"})
         # Written to a ".part" file first, so a broken download never has the final name.
         with urllib.request.urlopen(request) as r, open(path + ".part", "wb") as f:

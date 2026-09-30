@@ -67,7 +67,7 @@ public:
 
     bool resize(UINT w, UINT h, std::string &error) override
     {
-        drop_pictures(); // default-pool resources must go before Reset
+        drop_pictures(); // default-pool resources must be released before Reset
         pp_.BackBufferWidth = w;
         pp_.BackBufferHeight = h;
         if (FAILED(dev_->Reset(&pp_)))

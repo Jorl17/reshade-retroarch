@@ -79,7 +79,7 @@ constexpr float kAcceptMatch = 0.97f;
 // lower.
 constexpr float kContinueMatch = 0.90f;
 // Minimum number of gaps between boundaries, per axis, that must fit the estimated period
-// before it is trusted (see estimate_period()).
+// before it is used (see estimate_period()).
 constexpr int kMinEdges = 24;
 // Smallest and largest period looked for: the picture must be stretched at least 2x and
 // at most 32x.
@@ -209,8 +209,8 @@ Bars find_bars(const FrameView &f)
 }
 
 // Returns true when a w x h rectangle has a shape games are commonly shown at (4:3, 16:9,
-// 16:10, 3:2, 5:4, 8:7, 10:9, 1:1 or 21:9), to within 0.6%. Used to tell a letterboxed
-// game (content fills a 4:3 box) from a dark scene that merely has black edges.
+// 16:10, 3:2, 5:4, 8:7, 10:9, 1:1 or 21:9), to within 0.6%. Used to distinguish a
+// letterboxed game (content fills a 4:3 box) from a dark scene that merely has black edges.
 bool standard_aspect(double w, double h)
 {
     const double a = w / h;
@@ -249,8 +249,8 @@ std::vector<double> boundaries(const std::vector<int> &edges, int threshold)
 // positions `b`. On success returns true, sets `period`, and sets `consistent` to the
 // number of gaps between neighbouring boundaries that are whole multiples of it. Returns
 // false when there are fewer than kMinEdges usable gaps, or no period from kMinPeriod to
-// kMaxPeriod fits at least kMinEdges of them. Gaps can be several periods long:
-// neighbouring cells of equal colour hide the edge between them.
+// kMaxPeriod fits at least kMinEdges of them. Gaps can be several periods long: there is
+// no edge between neighbouring cells of equal colour.
 bool estimate_period(const std::vector<double> &b, double &period, int &consistent)
 {
     // Gaps between neighbouring boundaries, leaving out any too short to be a cell or
@@ -265,7 +265,7 @@ bool estimate_period(const std::vector<double> &b, double &period, int &consiste
     if (int(gaps.size()) < kMinEdges)
         return false;
 
-    // First guess: count gaps by length rounded to whole pixels, and take the shortest
+    // First estimate: count gaps by length rounded to whole pixels, and take the shortest
     // length that is common (at least 3 gaps and at least a third as many as the most
     // common length). Longer common lengths are usually multiples of it.
     std::vector<int> hist(size_t(4 * kMaxPeriod) + 2, 0);
@@ -354,7 +354,7 @@ struct Span
 
 // Returns the fraction of the boundaries inside span `s` (more than half a pixel from its
 // ends) that lie within 1 pixel of one of its cell edges, or 0 when no boundary is inside.
-// A high score means the span's grid explains the edges seen in the frame.
+// A high score means the span's grid matches the edges found in the frame.
 double span_score(const std::vector<double> &b, const Span &s)
 {
     int in = 0, on = 0;
@@ -398,8 +398,8 @@ std::vector<Span> axis_candidates(int frame_extent, const std::vector<double> &b
         s.score = span_score(b, s);
         return true;
     };
-    // Adds the placement from `o` to `e` to `c`, unless make() rejects it or `c` already
-    // has one with the same origin and extent.
+    // Adds the placement from `o` to `e` to `c`, unless make() returns false for it or `c`
+    // already has one with the same origin and extent.
     auto add = [&](double o, double e) {
         Span s;
         if (!make(o, e, s))
@@ -444,7 +444,7 @@ std::vector<Span> axis_candidates(int frame_extent, const std::vector<double> &b
     std::sort(c.begin(), c.end(), [](const Span &a, const Span &b2) {
         if (std::fabs(a.score - b2.score) > 0.02)
             return a.score > b2.score;
-        return a.extent > b2.extent; // prefer covering more of the frame
+        return a.extent > b2.extent; // the one covering more of the frame first
     });
     if (c.size() > 4)
         c.resize(4);
@@ -456,8 +456,9 @@ std::vector<Span> axis_candidates(int frame_extent, const std::vector<double> &b
 // a game would use. The whole frame always does. Anything smaller must be centred in the
 // frame (within one cell plus one pixel, on both axes), because games centre their picture,
 // and have a display shape: a standard aspect ratio, or square cells (the same stretch on
-// both axes, as integer or "pixel-perfect" scaling gives). This rejects partial grids found
-// around HD menus drawn over gameplay, and grid-like patterns in HD user interface art.
+// both axes, as integer or "pixel-perfect" scaling gives). This rule excludes partial grids
+// found around HD menus drawn over gameplay, and grid-like patterns in HD user interface
+// art.
 bool plausible(const Span &sx, const Span &sy, int frame_w, int frame_h)
 {
     if (sx.origin == 0 && sx.extent == frame_w && sy.origin == 0 && sy.extent == frame_h)
@@ -474,8 +475,8 @@ bool plausible(const Span &sx, const Span &sy, int frame_w, int frame_h)
 // pixels that are bit-for-bit equal to the centre pixel of their cell (the pixel
 // cell_centre() picks), so a real nearest-neighbour stretch scores about 1.0. When cells
 // are at least 3 pixels wide, pixels within 1 pixel of a cell edge are skipped: that is
-// where smoothing filters blend, and where round() vs floor() cell edge conventions
-// disagree. Only every (placement height / 720)-th row (at least every row) is checked, to
+// where smoothing filters blend, and where round() and floor() cell edge conventions give
+// different results. Only every (placement height / 720)-th row (at least every row) is checked, to
 // save time on tall placements.
 // Also sets `cells_with_detail` to the number of side-by-side cell pairs whose centre
 // pixels differ: evidence that the picture has content at this resolution, since a blank
@@ -633,7 +634,7 @@ PixelGrid detect_grid(const FrameView &f, std::string *log)
 {
     PixelGrid g;
     std::ostringstream out;
-    // Writes the diagnosis so far plus `why` to *log (when a log was asked for) and returns
+    // Writes the diagnosis so far plus `why` to *log (when a log is given) and returns
     // the grid as it stands.
     auto finish = [&](const char *why) {
         if (log)
@@ -651,7 +652,7 @@ PixelGrid detect_grid(const FrameView &f, std::string *log)
 
     // Horizontal period first, from edges between columns over the whole frame. HD art
     // beside a pillarboxed game shows up as long runs of edges, which boundaries()
-    // discards, so it does not disturb this step.
+    // discards, so it does not affect this step.
     const std::vector<int> ce = column_edges(f, row_step);
     const int sampled_rows = (f.height + row_step - 1) / row_step;
     const std::vector<double> bx = boundaries(ce, edge_threshold(ce, sampled_rows));
@@ -661,8 +662,8 @@ PixelGrid detect_grid(const FrameView &f, std::string *log)
     if (!estimate_period(bx, px_, cons_x))
         return finish("no regular column edges");
 
-    // Rows, measured only over the columns where the regular grid lives (plus one cell on
-    // each side), so HD art does not make every row look like an edge.
+    // Rows, measured only over the columns where the regular grid was found (plus one cell
+    // on each side), so HD art does not make every row look like an edge.
     double gx0 = 0, gx1 = 0;
     regular_extent(bx, px_, gx0, gx1);
     const int rx0 = std::max(0, int(gx0 - px_)), rx1 = std::min(f.width, int(gx1 + px_) + 1);
@@ -674,8 +675,8 @@ PixelGrid detect_grid(const FrameView &f, std::string *log)
     out << "period " << px_ << " x " << py_ << "; ";
 
     // Find bars, then list candidate placements per axis. On an axis with bars the
-    // "snapped" candidates hug the content; on an axis without bars the content spans the
-    // frame, so the full-frame candidate is it.
+    // "snapped" candidates fit the content exactly; on an axis without bars the content
+    // spans the frame, so the full-frame candidate is it.
     const Bars bars = find_bars(f);
     const bool bordered = bars.x || bars.y;
     const std::vector<Span> cx = axis_candidates(f.width, bx, px_, bars.x0, bars.x1);
@@ -685,7 +686,7 @@ PixelGrid detect_grid(const FrameView &f, std::string *log)
 
     // Validate every plausible pair of candidates and pick one. Bar pixels are all one
     // colour, so cells made of them validate perfectly too: around bars, validation alone
-    // cannot tell where the picture ends. Preference, in order:
+    // cannot find where the picture ends. Preference, in order:
     //  1. "framed": when the frame has bars, the smallest pair of snapped candidates (the
     //     tightest cover of the content between the bars) that validates and has a
     //     standard display shape (a letterboxed game rather than a dark scene);

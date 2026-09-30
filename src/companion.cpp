@@ -132,7 +132,7 @@ bool set_aside(const fs::path &file, std::string &error)
     for (int i = 1; i <= 100; ++i)
     {
         const std::wstring name = file.wstring() + L".removed" + (i == 1 ? std::wstring() : L"." + std::to_wstring(i));
-        // Without MOVEFILE_REPLACE_EXISTING this fails if the name is taken.
+        // Without MOVEFILE_REPLACE_EXISTING this fails if a file with that name exists.
         if (MoveFileExW(file.c_str(), name.c_str(), 0))
             return true;
         const DWORD e = GetLastError();

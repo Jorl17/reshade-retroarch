@@ -6,7 +6,7 @@
 Run it after build.bat. It takes the add-on from the build folder (--build), adds
 librashader.dll, the placeholder ReShade effect, the shader folder with its instructions,
 and the documentation and licences, and writes out/package/RetroArchShaders-<version>.zip.
-The version is --version, or else what `git describe` says (e.g. "v1.2-3-gabc1234").
+The version is --version, or else the output of `git describe` (e.g. "v1.2-3-gabc1234").
 
 librashader.dll is the library that loads and runs RetroArch shaders. With
 --librashader, that file is used. Without it, the pinned official librashader release
@@ -33,7 +33,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The librashader release shipped in the zip: its version, the download URL of the
 # official Windows x64 build, and the SHA-256 hash of that downloaded zip. Change all
-# three together, and THIRD_PARTY_NOTICES.md, which names this exact release.
+# three together, and THIRD_PARTY_NOTICES.md, which lists this exact release.
 LIBRASHADER_VERSION = "0.12.0"
 LIBRASHADER_URL = ("https://github.com/SnowflakePowered/librashader/releases/download/"
                    f"librashader-v{LIBRASHADER_VERSION}/librashader-x86_64-windows-v{LIBRASHADER_VERSION}-optimized.zip")

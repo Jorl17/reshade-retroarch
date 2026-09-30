@@ -34,7 +34,7 @@ add_library(rra_core STATIC
     src/capture.cpp
     src/vulkan_support.cpp)
 target_include_directories(rra_core PUBLIC src ${GEN})
-# Third-party headers are "external": their warnings are not ours to fix.
+# Third-party headers are "external": warnings in them are not reported.
 target_include_directories(rra_core SYSTEM PUBLIC third_party/librashader third_party/vulkan)
 target_link_libraries(rra_core PUBLIC d3d11 advapi32)
 

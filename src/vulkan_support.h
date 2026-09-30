@@ -7,7 +7,7 @@
 //    GPU's memory types and properties, and to find vkGetDeviceProcAddr. So the add-on creates
 //    a Vulkan instance of its own and picks, in it, the physical device that is the same GPU
 //    as the game's (same LUID, the GPU's locally unique identifier, which ReShade does report).
-//    Those queries then return the same answers as for the game's own objects. Mixing objects
+//    Those queries then return the same results as for the game's own objects. Mixing objects
 //    of two instances is outside the Vulkan specification, so this is a workaround. The
 //    proper fix needs ReShade to give add-ons the game's instance and physical device.
 // 2. The queue family of the game's queue, which command pools must be created for. ReShade
@@ -27,7 +27,8 @@
 #include <cstdint>
 #include <string>
 
-// What the add-on needs to know about the game's Vulkan device (see ChainDevice in chain.h).
+// The information about the game's Vulkan device that the add-on uses (see ChainDevice in
+// chain.h).
 struct VulkanHandles
 {
     uint64_t instance = 0;                  // VkInstance of the add-on's own instance
@@ -42,7 +43,7 @@ struct VulkanHandles
 // (VkQueueFlags, as reshade::api::command_queue::get_type() returns them); the queue family
 // is the GPU's only family with exactly those capabilities. The instance is created once and
 // kept until the process ends. Returns false and sets `error` (a message for the user) if
-// Vulkan cannot be loaded, no GPU matches, or the queue family cannot be told apart.
+// Vulkan cannot be loaded, no GPU matches, or the queue family cannot be determined.
 bool vulkan_handles(const uint8_t *luid, uint32_t queue_flags, VulkanHandles &out, std::string &error);
 
 // Device functions the add-on calls itself, looked up for one VkDevice.

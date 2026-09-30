@@ -12,12 +12,12 @@
 namespace
 {
 // Fills `out` with the parameters of `preset` (a preset already loaded with
-// librashader's preset_create), each with the value the preset gives it: the value
-// set in the .slangp if any, otherwise the shader's default. Returns false and sets
-// `error` if librashader cannot list them.
+// librashader's preset_create), each with its value in the preset: the value set in the
+// .slangp if any, otherwise the shader's default. Returns false and sets `error` if
+// librashader cannot list them.
 // A .slangp can start with `#reference "other.slangp"` to build on another preset and
 // then set some values itself, and the referenced file can do the same. When several
-// files in that chain set a parameter, the value read last wins (the referencing file's
+// files in that chain set a parameter, the value read last is used (the referencing file's
 // own lines come after its #reference), as when the preset runs.
 // (libra_preset_get_param is not used: it returns the first value set, and nothing at
 // all for parameters the preset does not set.)
@@ -119,8 +119,8 @@ static const void *gl_function(const char *name)
 // Fills the per-frame values librashader passes to the shaders, the same for every API:
 // playing forwards (frame_direction 1; -1 would mean rewinding), one shader run per
 // displayed frame (subframe 1 of 1), a source frame rate of 60 per second (assumed; the
-// real rate is not known here), and HDR brightness at its documented default (only HDR
-// presets read it).
+// real rate is not available here), and HDR brightness at its documented default (only
+// HDR presets read it).
 template <typename Options>
 static Options frame_options()
 {
@@ -170,7 +170,7 @@ bool ShaderChain::create(const ChainDevice &device, const std::string &preset_pa
     }
     const libra_instance_t &api = libra::api();
 
-    // Parse the preset file and the files it references.
+    // Parse the preset file and the files on its #reference lines.
     libra_shader_preset_t preset = nullptr;
     if (libra_error_t err = api.preset_create(preset_path.c_str(), &preset))
     {
@@ -370,8 +370,9 @@ bool ShaderChain::frame(uint64_t commands, const ChainImage &input, const ChainI
     case GraphicsApi::d3d12:
     {
         const frame_d3d12_opt_t opt = frame_options<frame_d3d12_opt_t>();
-        // Both images come with our own descriptors (views), so librashader does not have
-        // to create views of the resources itself (it could not for the typeless snapshot).
+        // Both images are passed with the add-on's own descriptors (views), so librashader
+        // does not create views of the resources itself (it cannot for the typeless
+        // snapshot).
         libra_image_d3d12_t in = {}, out = {};
         in.image_type = LIBRA_D3D12_IMAGE_TYPE_SOURCE_IMAGE;
         in.handle.source.descriptor.ptr = SIZE_T(input.view);
@@ -431,7 +432,7 @@ bool ShaderChain::frame(uint64_t commands, const ChainImage &input, const ChainI
 
 // Changes parameter `name` to `value` in the compiled preset and in params_. Returns
 // false (without setting `error`) when nothing is loaded, or false with `error` set
-// when librashader rejects the change.
+// when librashader returns an error for the change.
 bool ShaderChain::set_param(const std::string &name, float value, std::string &error)
 {
     if (chain_ == nullptr)

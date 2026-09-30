@@ -19,7 +19,7 @@ generated instead (and saved as native.png). The native picture must be at least
 Writes PNGs plus manifest.txt with one line per case:
     <valid> <native_w> <native_h> <rect_x> <rect_y> <rect_w> <rect_h> <file>
 The numbers are the expected grid: native resolution, then the rectangle it covers.
-<valid> says what the detector must return:
+<valid> is what the detector must return:
     0  no grid (a frame without sharp pixel art)
     1  exactly that grid
     2  exactly that grid, or no grid (HD menus over the game)
@@ -180,8 +180,8 @@ def main():
     case("int4x_320x240_in_1920x1080", place(1920, 1080, stretch(n43, 1280, 960), 320, 60, None), 1, (320, 240), (320, 60, 1280, 960))
 
     # Something drawn over a full-frame game: a pause menu, a text box, a title card.
-    # The game's grid is still visible around it; the detector must keep the full-frame
-    # grid or give up, never take the visible piece for the whole picture.
+    # The game's grid is still visible around it; the detector must return the full-frame
+    # grid or no grid, never the visible piece as the whole picture.
     for fw, fh in [(3840, 2160), (2560, 1440), (1920, 1080)]:
         full = stretch(native, fw, fh)
         art = hd_art(fh, fw, 5)
@@ -196,7 +196,7 @@ def main():
         case(f"menu_over_dim_game_{fw}x{fh}", dim, 2, (nw, nh), (0, 0, fw, fh))
         # Sonic Origins' pause menu: a diagonal HD panel from the top right towards the
         # bottom middle, and a bar along the bottom. A clean centred box of game pixels
-        # remains, which is easy to take for the whole picture. `panel` marks the HD
+        # remains, which looks like a whole picture. `panel` marks the HD
         # pixels, using coordinates u, v that run from 0 to 1 across and down the frame.
         v, u = np.mgrid[0:fh, 0:fw]
         u, v = u / fw, v / fh

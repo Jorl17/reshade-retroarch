@@ -17,22 +17,22 @@
 struct ShaderParam
 {
     // `name` identifies the parameter in .slangp files and librashader calls;
-    // `description` is the label to show (the name when the shader gives none).
+    // `description` is the label to show (the name when the shader has none).
     std::string name, description;
     float value = 0;   // value in use now (ShaderChain::set_param changes it)
-    float initial = 0; // value the preset gives it: set in the .slangp, or the shader's default
+    float initial = 0; // value in the preset: set in the .slangp, or the shader's default
     // Slider range and step, as declared by the shader.
     float minimum = 0, maximum = 0, step = 0;
 };
 
 // Fills `out` with the parameters of the preset file at `preset_path` (a UTF-8 path),
-// each with the value the preset gives it. Reads files only: nothing is compiled and
+// each with its value in the preset. Reads files only: nothing is compiled and
 // no GPU is needed. Returns false and sets `error` if librashader is not loaded (see
 // librashader_api.h) or the preset cannot be read.
 bool read_preset_params(const std::string &preset_path, std::vector<ShaderParam> &out, std::string &error);
 
-// Returns the parameters in `current` whose value differs from the value `base` gives
-// them, as (name, value) pairs in `current`'s order; a parameter missing from `base` is
+// Returns the parameters in `current` whose value differs from their value in `base`, as
+// (name, value) pairs in `current`'s order; a parameter missing from `base` is
 // always included, and values within 1e-6 count as equal.
 // This is what a companion .slangp has to store. (A companion is the small .slangp the
 // add-on writes next to a ReShade preset: a #reference line with the path of the preset
@@ -72,7 +72,7 @@ struct ChainDevice
 // calls later, so the GPU must have finished the earlier frame by then. Chains are created
 // with this value, and the add-on's renderer (frame_renderer.h) waits for the GPU to finish
 // the frame this many frames back before recording a new one, so it holds however many
-// frames ReShade or the driver would otherwise let the GPU fall behind.
+// frames the GPU is behind.
 constexpr uint32_t kFramesInFlight = 3;
 
 // One image a chain reads (its input) or draws into (its output), as native handles of
@@ -90,7 +90,6 @@ constexpr uint32_t kFramesInFlight = 3;
 //  - Vulkan: `resource` (a VkImage), `format` (a VkFormat), `width` and `height`. The
 //    input must be in the SHADER_READ_ONLY_OPTIMAL layout and the output in
 //    COLOR_ATTACHMENT_OPTIMAL, where it stays.
-// (Other APIs are added with their support.)
 struct ChainImage
 {
     uint64_t resource = 0;          // the texture or image itself
@@ -111,7 +110,8 @@ public:
     ShaderChain &operator=(const ShaderChain &) = delete;
     ~ShaderChain() { destroy(); }
 
-    // True for the APIs create() can compile for. The others fail with an explanation.
+    // True for the APIs create() can compile for. For the others it fails with an error
+    // message.
     static bool supports(GraphicsApi api);
 
     // Loads the preset file at `preset_path` (a UTF-8 path) and compiles all its shader
@@ -120,7 +120,7 @@ public:
     // supported, or the preset fails to load or compile; ready() is then false. Compiling
     // runs on the calling thread and can take a while for large presets.
     bool create(const ChainDevice &device, const std::string &preset_path, std::string &error);
-    // Frees the compiled preset and forgets its parameters and path. Safe to call when
+    // Frees the compiled preset and clears its parameters and path. Safe to call when
     // nothing is loaded.
     void destroy();
     // True when a preset is compiled and frame() can draw.
@@ -133,18 +133,18 @@ public:
     // is recorded on `commands`, the API's native command recorder: an
     // ID3D11DeviceContext* on Direct3D 11, an open ID3D12GraphicsCommandList* on
     // Direct3D 12 (librashader binds its own descriptor heaps on it), a VkCommandBuffer in
-    // the recording state on Vulkan; unused on OpenGL and
-    // Direct3D 9 (which draws on the device given to create()). On OpenGL,
-    // the context current on the calling thread is used (the one the chain was created with). Returns false and sets `error` if no preset is loaded or librashader
-    // reports an error.
+    // the recording state on Vulkan; unused on OpenGL and Direct3D 9. Direct3D 9 draws on
+    // the device given to create(); OpenGL uses the context current on the calling thread
+    // (the one the chain was created with). Returns false and sets `error` if no preset is
+    // loaded or librashader returns an error.
     // Do not rely on the rest of `output` being kept: librashader clears all of it.
     bool frame(uint64_t commands, const ChainImage &input, const ChainImage &output, int x, int y, int w, int h,
                uint64_t frame_count, std::string &error);
 
     // Sets parameter `name` of the loaded preset to `value`, from the next frame() on,
     // and updates it in params(). Returns false if no preset is loaded (leaving `error`
-    // unchanged), or if librashader rejects the change, for example for an unknown name
-    // (with `error` set).
+    // unchanged), or if librashader returns an error for the change, for example for an
+    // unknown name (with `error` set).
     bool set_param(const std::string &name, float value, std::string &error);
     // The loaded preset's parameters with their current values; empty when nothing is
     // loaded.

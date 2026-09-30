@@ -100,7 +100,7 @@ std::vector<PresetEntry> scan_presets(const std::vector<ShaderRoot> &roots, cons
     std::vector<PresetEntry> out;
     std::unordered_set<std::wstring> visited; // canonical folders, so links cannot loop
     skipped = 0;
-    // True the first time a folder is seen (by its real path, ignoring case), false after.
+    // True the first time a folder is found (by its real path, ignoring case), false after.
     auto first_visit = [&](const fs::path &dir) {
         std::error_code ec;
         const fs::path canon = fs::canonical(dir, ec);

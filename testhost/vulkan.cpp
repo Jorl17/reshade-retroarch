@@ -13,7 +13,7 @@
 namespace
 {
 // The Vulkan functions the host uses. Vulkan is reached through the system loader,
-// vulkan-1.dll, which every Vulkan driver installs; it is loaded at run time and each
+// vulkan-1.dll, which is installed with every Vulkan driver; it is loaded at run time and each
 // function is looked up by name, so building needs only the headers, not the Vulkan SDK.
 struct Vk
 {
@@ -215,7 +215,7 @@ public:
 
 private:
     // Loads vulkan-1.dll, creates the Vulkan instance and a surface for the window. Sets
-    // `unsupported` if HDR10 was asked for and the system cannot provide it.
+    // `unsupported` if HDR10 was requested and the system cannot provide it.
     bool create_instance(std::string &error, bool &unsupported)
     {
         lib_ = LoadLibraryW(L"vulkan-1.dll");
@@ -241,7 +241,7 @@ private:
                                                                   : VK_ERROR_INITIALIZATION_FAILED;
         if (created != VK_SUCCESS)
         {
-            // The VkResult tells e.g. a missing layer (-6) from a missing extension (-7).
+            // The VkResult differs for a missing layer (-6) and a missing extension (-7).
             error = "vkCreateInstance failed (VkResult " + std::to_string(int(created)) + ")" +
                     (o_.hdr10 ? " (no HDR colour space support?)" : "");
             unsupported = o_.hdr10;
@@ -373,9 +373,9 @@ private:
     }
 
     // Chooses the swap chain format and colour space for the requested Format, among those
-    // the window's surface offers. Sets `bgra_` when the chosen format stores blue first
-    // (Windows drivers often offer only that); encode/decode handle it. Sets
-    // `unsupported` when the surface offers nothing suitable.
+    // the window's surface supports. Sets `bgra_` when the chosen format stores blue first
+    // (Windows drivers often support only that); encode/decode handle it. Sets
+    // `unsupported` when the surface supports nothing suitable.
     bool pick_format(std::string &error, bool &unsupported)
     {
         uint32_t n = 0;
@@ -405,13 +405,13 @@ private:
                     bgra_ = w.bgra;
                     return true;
                 }
-        error = "the display does not offer this swap chain format";
+        error = "the display does not support this swap chain format";
         unsupported = true;
         return false;
     }
 
     // Creates (or re-creates, replacing the old one) the swap chain at `w` x `h` and gets
-    // its images. The images must allow copies in and out (TRANSFER_DST/SRC usage).
+    // its images. The images must support copies in and out (TRANSFER_DST/SRC usage).
     bool create_swapchain(UINT w, UINT h, std::string &error, bool &unsupported)
     {
         VkSurfaceCapabilitiesKHR caps = {};
@@ -545,7 +545,7 @@ private:
 
     // Records a layout transition of `image` from `from` to `to`. Vulkan requires images to
     // be in the right layout for each use (copy destination, presentation...). The barrier
-    // waits for all earlier work, which is simple and always correct.
+    // orders the transition after all earlier work, which is simple and always correct.
     void barrier(VkImage image, VkImageLayout from, VkImageLayout to)
     {
         VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};

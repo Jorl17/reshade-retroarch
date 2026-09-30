@@ -1,10 +1,11 @@
 #pragma once
-// The GPU side of the add-on (Direct3D 11): takes the frame the game is about to show,
-// rebuilds the game's original low-resolution picture from it, runs a RetroArch shader
-// preset on that picture and writes the result back into the frame.
+// The offline renderer (Direct3D 11): takes a frame, rebuilds the game's original
+// low-resolution picture from it, runs a RetroArch shader preset on that picture and
+// writes the result back into the frame.
 //
-// Used by the ReShade add-on (addon.cpp) and by the offline tool tools/render_png.cpp,
-// which does the same to a PNG screenshot, so both run exactly the same code.
+// Used by the offline tool tools/render_png.cpp, which applies it to a PNG screenshot. The
+// add-on itself uses FrameRenderer (frame_renderer.h), which does the same steps through
+// ReShade's API.
 
 #include "chain.h"
 #include "grid_detect.h"
@@ -23,9 +24,9 @@
 // each original pixel becomes a block of screen pixels. A PixelGrid (grid_detect.h) gives
 // that original resolution and the rectangle of the frame the stretched picture covers;
 // render() reads one frame pixel from the centre of each block and gets the picture
-// back at its original size, which is what RetroArch shaders expect. That step is itself
-// a one-pass RetroArch preset, the capture preset (capture.h, capture.slang), run
-// through librashader like the user's preset.
+// back at its original size, which is what RetroArch shaders are written for. That step
+// is itself a one-pass RetroArch preset, the capture preset (capture.h, capture.slang),
+// run through librashader like the user's preset.
 //
 // Owns the textures and shaders this needs and recreates textures when sizes or formats
 // change. Not thread-safe: calls must not overlap.
@@ -49,10 +50,9 @@ public:
 
     // Copies `frame` (the game's finished picture for this frame, normally the back
     // buffer: the texture that will be shown on screen) into a texture owned by the
-    // renderer, and returns that copy (also available from snapshot_texture()).
-    // render() reads the copy, which lets it write its result into `frame` itself. The
-    // copy always has one sample per pixel, even when the frame is multisampled (MSAA),
-    // so the grid detector (detector.h) can read it back to the CPU.
+    // renderer, and returns that copy. render() reads the copy, which lets it write its
+    // result into `frame` itself. The copy always has one sample per pixel, even when the
+    // frame is multisampled (MSAA).
     // Call it every frame before render(), and before anything else draws over the frame.
     // Returns nullptr and sets `error` when the frame's format is not supported (see
     // supported_format()) or the copy cannot be created.
@@ -62,7 +62,7 @@ public:
     // passed to snapshot(). Rebuilds the native image described by `grid` from the last
     // snapshot (grid.native_w x grid.native_h pixels, taken from grid's rectangle), runs
     // `chain` on it, and copies the result into `dst` over grid's rectangle, at the
-    // rectangle's size. `frame_count` is the frame number the shaders see; animated
+    // rectangle's size. `frame_count` is the frame number passed to the shaders; animated
     // effects (noise, flicker) use it, so it should go up by one each frame.
     // Returns false and sets `error` when there is no snapshot, `grid` is invalid or
     // reaches outside the snapshot, `dst` is multisampled, or a texture or the chain fails.
@@ -80,9 +80,6 @@ public:
     // The native image rebuilt by the last render() (grid.native_w x grid.native_h, 8 bits
     // per channel RGBA), or null before the first one. tools/render_png.cpp saves it.
     ID3D11Texture2D *native_texture() const { return native_tex_; }
-    // The copy made by the last snapshot(), or null before the first one. The add-on
-    // hands it to the grid detector.
-    ID3D11Texture2D *snapshot_texture() const { return snap_tex_; }
 
     // Returns true for the frame formats the capture can read: 8 bits per channel
     // RGBA, BGRA or BGRX (plain, sRGB or typeless) and 10-bit RGB with 2-bit alpha.
@@ -107,7 +104,7 @@ private:
     // Device passed to init(). Not owned: the renderer holds no reference to it.
     ID3D11Device *device_ = nullptr;
     // The capture preset (capture.slangp), compiled for `device_`, and the grid whose
-    // values it was last given (see set_capture_grid).
+    // values were last passed to it (see set_capture_grid).
     ShaderChain capture_;
     PixelGrid capture_grid_;
 

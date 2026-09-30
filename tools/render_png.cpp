@@ -1,7 +1,7 @@
 // Command-line tool: applies a RetroArch shader preset (.slangp file) to a screenshot
 // and saves the result as a PNG, using the same code the ReShade add-on uses (grid
 // detection, capture of the native image, librashader), but with no game and no ReShade.
-// Renders with Direct3D 11 (the add-on's Renderer) or, with --api, with Direct3D 12
+// Renders with Direct3D 11 (Renderer, src/renderer.h) or, with --api, with Direct3D 12
 // (render_d3d12.h) or Direct3D 9 (render_d3d9.h).
 // The end-to-end test (tests/e2e.py) uses its output as the expected result, and
 // tests/compat_sweep.py uses it to try every preset in a shader folder.
@@ -273,8 +273,8 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
 
-    // Set up the renderer (the add-on's capture and compositing code) and compile the
-    // preset with librashader, then apply the --set parameter changes.
+    // Set up the renderer (the same capture and compositing steps as the add-on's) and
+    // compile the preset with librashader, then apply the --set parameter changes.
     Renderer renderer;
     ShaderChain chain;
     const auto t0 = std::chrono::steady_clock::now();

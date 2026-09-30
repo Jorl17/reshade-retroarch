@@ -1,7 +1,7 @@
 // Implementation of GridDetector (declared in detector.h): copies frames back from the GPU
 // through ReShade's API without making the game wait, runs detect_grid() (grid_detect.cpp)
-// on them on a worker thread, and replaces the pixel grid in use with the results the
-// rules allow.
+// on them on a worker thread, and replaces the pixel grid in use with a result in the cases
+// listed in detector.h.
 
 #include "detector.h"
 
@@ -9,15 +9,15 @@
 
 namespace
 {
-// Seconds between the start of one frame copy and the next: while a confirmed grid is
-// known, and while there is none or it is provisional (rescaled after a resize).
+// Seconds between the start of one frame copy and the next: while there is a confirmed
+// grid, and while there is none or it is provisional (rescaled after a resize).
 constexpr double kIntervalKnown = 1.0;
 constexpr double kIntervalSearching = 0.25;
 }
 
 using namespace reshade::api;
 
-// Starts the worker thread, which sleeps until tick() gives it a frame.
+// Starts the worker thread, which sleeps until tick() passes it a frame.
 GridDetector::GridDetector()
 {
     worker_ = std::thread(&GridDetector::worker_main, this);
@@ -36,7 +36,7 @@ GridDetector::~GridDetector()
         worker_.join();
 }
 
-// Body of the worker thread. Runs at below-normal priority so the game comes first. Sleeps
+// Body of the worker thread. Runs at below-normal priority so the game's threads run first. Sleeps
 // until a job is pending, takes job_frame_, runs detect_grid() on it with the mutex
 // unlocked (so tick() never waits for a detection), then stores the result and sets
 // job_done_ for tick() to collect. Returns when quit_ is set.
@@ -99,8 +99,8 @@ bool GridDetector::ensure_readback(device *dev, const resource_desc &desc)
 // size, then acts on stage_:
 //  - idle: once enough time has passed, queues a GPU copy of `frame` into readback_ and a
 //    fence signal after it (without a fence, waits right there for the GPU to finish it);
-//  - copied: once the GPU has finished the copy (fence reached), maps readback_ and gives
-//    the pixels to the worker;
+//  - copied: once the GPU has finished the copy (fence signalled), maps readback_ and
+//    passes the pixels to the worker;
 //  - analysing: once the worker is done, unmaps readback_ and passes the result to consume().
 void GridDetector::tick(device *dev, command_queue *queue, resource frame, double now)
 {
@@ -151,7 +151,8 @@ void GridDetector::tick(device *dev, command_queue *queue, resource frame, doubl
         {
             // No fence (ReShade 6.8 makes one on every API except Vulkan drivers without
             // timeline semaphores): submit the copy and wait for the GPU to finish all its
-            // work. Slower, but a count of frames would only guess how far behind it is.
+            // work. Slower, but a fixed count of frames may not match how far behind the GPU
+            // is.
             queue->wait_idle();
         }
         copy_generation_ = generation_;
@@ -212,7 +213,7 @@ void GridDetector::tick(device *dev, command_queue *queue, resource frame, doubl
 }
 
 // Applies one detection result: records `log` for status() and replaces the grid in use
-// with `result` if the rules in the class comment in detector.h allow it.
+// with `result` in the cases listed in the class comment in detector.h.
 void GridDetector::consume(const PixelGrid &result, const std::string &log)
 {
     ++detections_;
@@ -251,7 +252,7 @@ void GridDetector::consume(const PixelGrid &result, const std::string &log)
     // Growing from such a piece (adopted when there was nothing better, e.g. the game
     // started on a title card) to a bounded picture that contains it: adopt at once.
     const bool grows_out_of_piece = grid_.valid && !grid_.bounded && result.bounded && part_of(grid_, result);
-    // A different grid needs 2 agreeing results in a row, or just 1 when there is no
+    // A different grid needs 2 identical results in a row, or just 1 when there is no
     // confirmed grid (none, or provisional after a resize) or when growing out of a piece.
     const int needed = (grid_.valid && !provisional_ && !grows_out_of_piece) ? 2 : 1;
     if (candidate_hits_ >= needed)
@@ -261,7 +262,7 @@ void GridDetector::consume(const PixelGrid &result, const std::string &log)
     }
 }
 
-// Forgets the grid in use and any candidate, marks detections under way as stale, and makes
+// Clears the grid in use and any candidate, marks detections under way as stale, and makes
 // the next tick() start a copy at once.
 void GridDetector::redetect()
 {

@@ -34,16 +34,17 @@ runtimes have with other presets.
 the same frame through the same code (tools/render_png.exe) on APIs the add-on supports.
 The offline render uses the same API as the run for Direct3D 12 and Direct3D 9
 (librashader's runtimes for them render some presets differently from its Direct3D 11
-one) and Direct3D 11 for the others (render_png cannot render with them). On APIs the add-on does not support yet,
-every frame must be left untouched and ReShade.log must say why.
+one) and Direct3D 11 for the others (render_png cannot render with them). On APIs the
+add-on does not support yet, every frame must be left untouched and ReShade.log must
+contain the reason.
 
-The only effect file installed is the placeholder RetroArchShaders.fx, which also
+The only effect file installed is the placeholder RetroArchShaders.fx, so the test also
 checks that the add-on runs when no other ReShade effects are present.
 
 With --vulkan-validation, the Vulkan run also loads Khronos' validation layer (from the
-Vulkan SDK) below ReShade, so it checks every Vulkan call that reaches the driver, and
-fails if it reports an error, apart from two known ones that are not the add-on's (see
-validation_errors()).
+Vulkan SDK) below ReShade, which checks every Vulkan call that reaches the driver. The
+test fails if the layer's log has an error, apart from two known ones that are not the
+add-on's (see validation_errors()).
 """
 import argparse
 import json
@@ -62,9 +63,10 @@ import make_synthetic as ms  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]
-# APIs the add-on renders on. On the others it must leave frames untouched and say why.
+# APIs the add-on renders on. On the others it must leave frames untouched and log the
+# reason.
 SUPPORTED = {"d3d9", "d3d11", "d3d12", "opengl", "vulkan"}
-# What ReShade.log must say on an API the add-on does not support.
+# What ReShade.log must contain on an API the add-on does not support.
 API_NAMES = {"d3d9": "Direct3D 9", "d3d10": "Direct3D 10", "d3d11": "Direct3D 11", "d3d12": "Direct3D 12",
              "opengl": "OpenGL", "vulkan": "Vulkan"}
 # File name ReShade must have next to the game for each API (Vulkan uses a layer instead).
@@ -88,7 +90,7 @@ ROUNDING_FRACTION = 1e-3
 
 
 # Validation layer messages that are not the add-on's (checked by running without it):
-# ReShade 6.8 calls vkGetPrivateData on images the layer considers invalid, with or
+# ReShade 6.8 calls vkGetPrivateData on images the layer reports as invalid, with or
 # without any add-on. Muted.
 RESHADE_VALIDATION_ERROR = "VUID-vkGetPrivateData-objectHandle-09498"
 # librashader 0.12 does not destroy some Vulkan objects when a chain is freed: per shader
@@ -102,8 +104,8 @@ LIBRASHADER_LEAK_KINDS = {"VkRenderPass", "VkPipelineLayout", "VkDescriptorSetLa
 
 
 def validation_errors(text):
-    """The validation layer's errors in `text` (its log) that are the add-on's to answer
-    for, as a list of their first lines: all errors, except leak reports made only of
+    """The validation layer's errors in `text` (its log) that can come from the add-on, as
+    a list of their first lines: all errors, except leak reports made only of
     librashader's known leaks (see LIBRASHADER_LEAK_KINDS)."""
     errors = []
     for block in text.split("Validation Error: ")[1:]:
@@ -175,7 +177,7 @@ def prepare_common(args, common):
     }
     for name, img in frames.items():
         Image.fromarray(img).save(os.path.join(common, name + ".png"))
-    # The companions reference their presets by absolute path: no copy of the shader folder
+    # The companions' #reference lines hold absolute paths: no copy of the shader folder
     # needed. A: the preset under test. N: the exact nearest-neighbour test preset.
     with open(os.path.join(common, "A.slangp"), "w") as f:
         f.write('#reference "{}"\n'.format(os.path.join(os.path.abspath(args.shaders), args.preset).replace("\\", "/")))
@@ -255,8 +257,8 @@ def install(args, api, work, common):
     env = {"VK_ADD_LAYER_PATH": work, "VK_INSTANCE_LAYERS": "VK_LAYER_reshade"}
     if args.vulkan_validation:
         # The validation layer goes after ReShade in the list: further from the game, so
-        # the calls ReShade and the add-on make pass through it too. Its messages go to a log file per
-        # run of the host (see host() in run_api).
+        # the calls ReShade and the add-on make pass through it too. Its messages go to a
+        # log file per run of the host (see host() in run_api).
         env["VK_ADD_LAYER_PATH"] = work + os.pathsep + os.path.abspath(args.vulkan_validation)
         env["VK_INSTANCE_LAYERS"] = "VK_LAYER_reshade" + os.pathsep + "VK_LAYER_KHRONOS_validation"
         env["VK_KHRONOS_VALIDATION_DEBUG_ACTION"] = "VK_DBG_LAYER_ACTION_LOG_MSG"

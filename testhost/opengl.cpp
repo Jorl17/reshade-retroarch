@@ -206,8 +206,8 @@ private:
         GLuint tex = 0, fbo = 0;
     };
 
-    // Sizes the window's client area, and so the back buffer, to `w` x `h` and remembers
-    // that size. Returns false if the window could not get that size.
+    // Sizes the window's client area, and so the back buffer, to `w` x `h` and stores
+    // that size. Returns false if the client area does not have that size afterwards.
     bool size_window(UINT w, UINT h)
     {
         if (!::size_window(o_.hwnd, w, h))

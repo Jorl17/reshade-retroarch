@@ -22,16 +22,16 @@ void release(T *&p)
 }
 
 // Background for the two functions below. A Direct3D format fixes how many bits each
-// channel of a pixel has and how shaders interpret them. "UNORM" formats hand the
+// channel of a pixel has and how shaders interpret them. "UNORM" formats pass the
 // stored integers to shaders as 0..1 with no conversion; "UNORM_SRGB" formats decode
 // them from sRGB to linear light first. Formats with the same bit layout form a family
 // (R8G8B8A8_UNORM, R8G8B8A8_UNORM_SRGB, ...), and its "TYPELESS" member fixes only the
-// layout: each view of such a texture chooses the interpretation.
+// layout: the format of each view of such a texture sets the interpretation.
 
 // Returns the plain UNORM format to read or draw a texture of format `f` with: the sRGB
 // and typeless members of the supported 8-bit and 10-bit families map to their UNORM
-// member, and every other format is returned unchanged. Shaders must see the values the
-// game stored, not sRGB-decoded ones, exactly as RetroArch hands a core's output (a
+// member, and every other format is returned unchanged. Shaders must receive the values
+// the game stored, not sRGB-decoded ones, exactly as RetroArch passes a core's output (a
 // core is RetroArch's name for an emulator) to a preset.
 DXGI_FORMAT unorm_view(DXGI_FORMAT f)
 {
@@ -109,7 +109,7 @@ bool Renderer::init(ID3D11Device *device, std::string &error)
     return true;
 }
 
-// Releases every GPU object and forgets the device and all sizes and formats.
+// Releases every GPU object and clears the device and all sizes and formats.
 void Renderer::shutdown()
 {
     release(out_rtv_);
@@ -266,7 +266,7 @@ bool Renderer::ensure_output(int w, int h, DXGI_FORMAT format, std::string &erro
 bool Renderer::render(ID3D11DeviceContext *ctx, const PixelGrid &grid, ShaderChain &chain, ID3D11Texture2D *dst,
                       uint64_t frame_count, std::string &error)
 {
-    // Refuse to run without a snapshot or a valid grid, or with a grid whose rectangle
+    // Return an error without a snapshot or a valid grid, or with a grid whose rectangle
     // reaches outside the snapshot.
     if (snap_tex_ == nullptr || !grid.valid)
     {

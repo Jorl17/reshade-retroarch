@@ -10,7 +10,7 @@
 //    (no scaling, no filtering, no shaders),
 //  - show it (present),
 //  - on request, read the back buffer back to the CPU.
-// Because nothing is transformed, the frame ReShade gets is byte-identical on every
+// Because nothing is transformed, the frame passed to ReShade is byte-identical on every
 // API, so results from different APIs can be compared directly.
 
 #include <windows.h>
@@ -25,7 +25,7 @@
 enum class Format
 {
     rgba8,     // 8 bits per channel, red first in memory (blue first on APIs that only offer that)
-    rgba8srgb, // the same bytes, but the API is told they are sRGB-encoded
+    rgba8srgb, // the same bytes, declared to the API as sRGB-encoded
     rgb10a2,   // 10 bits per colour channel, 2 bits of alpha, packed into 32 bits
 };
 
@@ -36,13 +36,13 @@ struct Image
     std::vector<uint8_t> rgba;
 };
 
-// What the host asks a backend to create.
+// What a backend creates, as requested by the host.
 struct Options
 {
     HWND hwnd = nullptr;           // window to draw into
     UINT width = 0, height = 0;    // back buffer size in pixels
     Format format = Format::rgba8; // back buffer format
-    bool hdr10 = false;            // tell the system the output is HDR10 (ST.2084), as games with HDR on do
+    bool hdr10 = false;            // declare the output as HDR10 (ST.2084), as games with HDR on do
     bool warp = false;             // Direct3D only: use Windows' software renderer instead of the GPU
     int adapter = -1;              // Direct3D 11 only: the GPU to use (DXGI's numbering), -1 for the default
 };
@@ -55,9 +55,10 @@ class Backend
 public:
     virtual ~Backend() = default;
 
-    // Creates the device and swap chain described by `o`. When the API cannot do what
-    // was asked at all (for example Direct3D 9 has no windowed 10-bit back buffers),
-    // returns false and sets `unsupported`, so callers can tell "not possible" from "broken".
+    // Creates the device and swap chain described by `o`. When the API cannot provide the
+    // requested format or output at all (for example Direct3D 9 has no windowed 10-bit
+    // back buffers), returns false and sets `unsupported`, so callers can distinguish
+    // "not possible" from "broken".
     virtual bool init(const Options &o, std::string &error, bool &unsupported) = 0;
 
     // Changes the back buffer size to `w` x `h`, like a game switching resolution.

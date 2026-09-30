@@ -85,7 +85,7 @@ bool render_d3d9(std::vector<uint8_t> &rgba, UINT w, UINT h, const PixelGrid &gr
         return false;
     }
 
-    // The capture preset (Shader Model 3 version), given the grid (as
+    // The capture preset (Shader Model 3 version), with the grid set (as
     // FrameRenderer::set_capture_grid), and the preset.
     const ChainDevice chain_dev = {GraphicsApi::d3d9, reinterpret_cast<uint64_t>(dev.Get())};
     ShaderChain capture, chain;

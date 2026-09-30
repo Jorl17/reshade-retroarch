@@ -14,8 +14,8 @@ using namespace reshade::api;
 
 // A ring of kFramesInFlight private command lists librashader records into on Direct3D 12
 // and Vulkan (see frame_renderer.h), used in turn. One is reused only once the GPU has
-// finished what was recorded into it the last time, checked with a fence (a marker the GPU
-// reaches after the list; ReShade's fences are not used because signalling one submits
+// finished what was recorded into it the last time, checked with a fence (a value the GPU
+// signals after the list; ReShade's fences are not used because signalling one submits
 // ReShade's commands at that point). So when frame N is recorded, the GPU has finished
 // frame N - kFramesInFlight, as librashader requires (see kFramesInFlight in chain.h).
 struct FrameRenderer::PrivateCommands
@@ -34,8 +34,9 @@ struct FrameRenderer::PrivateCommands
 };
 
 // Direct3D 12: command allocators (the memory a command list records into) used in turn
-// with one command list, and a fence (a counter the GPU sets when it reaches a point in the
-// queue) that shows when the GPU has finished each allocator's list.
+// with one command list, and a fence (a counter the GPU sets once it has executed the
+// commands submitted before the signal), from which the renderer reads whether the GPU has
+// finished each allocator's list.
 struct FrameRenderer::D3D12Commands final : FrameRenderer::PrivateCommands
 {
     ID3D12CommandQueue *queue = nullptr; // not owned
@@ -62,7 +63,7 @@ struct FrameRenderer::D3D12Commands final : FrameRenderer::PrivateCommands
                SUCCEEDED(list->Close()) && SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
     }
 
-    // Blocks until the GPU has reached fence value `value`.
+    // Blocks until the fence's value is at least `value`.
     void wait_for(UINT64 value)
     {
         if (fence != nullptr && fence->GetCompletedValue() < value)
@@ -149,7 +150,7 @@ struct FrameRenderer::VulkanCommands final : FrameRenderer::PrivateCommands
     int current = 0;
 
     // Waits until the GPU has finished buffers[i] if it was submitted, and resets its fence
-    // for the next submission. Returns false if Vulkan reports an error (device lost).
+    // for the next submission. Returns false if Vulkan returns an error (device lost).
     bool finish(int i)
     {
         if (!pending[i])
@@ -188,7 +189,7 @@ struct FrameRenderer::VulkanCommands final : FrameRenderer::PrivateCommands
     // Records a barrier making everything written before it on the queue visible to
     // everything after it (all stages, all memory). At the start of a buffer it covers
     // ReShade's commands submitted just before (the snapshot copy); at the end, ReShade's
-    // commands submitted after (the copy of the result into the frame). Barriers reach
+    // commands submitted after (the copy of the result into the frame). Barriers apply
     // across submissions on the same queue, so no ReShade barrier is relied on.
     void full_barrier()
     {
@@ -212,7 +213,7 @@ struct FrameRenderer::VulkanCommands final : FrameRenderer::PrivateCommands
     }
 
     // The image layout ReShade uses for each state the renderer uses (ReShade 6.8's
-    // convert_usage_to_image_layout), so that ReShade's barriers and these agree.
+    // convert_usage_to_image_layout), so that ReShade's barriers and these match.
     static VkImageLayout layout(resource_usage usage)
     {
         switch (usage)
@@ -403,8 +404,8 @@ ChainImage FrameRenderer::chain_image(resource res, resource_view view, format f
     if (chain_device_.api == GraphicsApi::opengl)
     {
         // ReShade's OpenGL handles hold the object's name in their low 32 bits. The view is
-        // used: it is the texture seen with the right format (a texture view when ReShade
-        // had to make one). librashader takes the sized internal format.
+        // passed because it has the right format (it is a separate texture view when
+        // ReShade created one for that). librashader takes the sized internal format.
         uint32_t gl_format = 0x8058; // GL_RGBA8
         if (format_to_default_typed(fmt, 0) == format::r10g10b10a2_unorm)
             gl_format = 0x8059; // GL_RGB10_A2
@@ -628,7 +629,7 @@ void FrameRenderer::transition(resource res, resource_usage before, resource_usa
 bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelGrid &grid, ShaderChain &chain,
                            resource dst, uint64_t frame_count, std::string &error)
 {
-    // Refuse to run without a snapshot or a valid grid, or with a grid whose rectangle
+    // Return an error without a snapshot or a valid grid, or with a grid whose rectangle
     // reaches outside the snapshot.
     if (snap_.handle == 0 || !grid.valid)
     {
@@ -677,7 +678,7 @@ bool FrameRenderer::render(command_list *cmd, command_queue *queue, const PixelG
                            int(rh), frame_count, error);
     transition(out_, resource_usage::render_target, resource_usage::copy_source);
     // Submit even after a failure: the list is open, and the transitions above must run
-    // for the states to be what the next frame expects.
+    // so the next frame starts from the states it is recorded for.
     std::string submit_error;
     if (!end_librashader(submit_error) && ok)
     {

@@ -10,7 +10,7 @@
 // using capture_sm3.slang (for Direct3D 9, whose Shader Model 3 has no integer maths)
 // when `shader_model_3` is set, else the one using capture.slang. The files are built into
 // the program; librashader only loads presets from files, so the first call writes them
-// into a folder under the user's temporary directory (named after their content, so
-// different versions never mix) and later calls return the same path. Returns an empty
+// into a folder under the user's temporary directory (its name includes a hash of their
+// content, so different versions never mix) and later calls return the same path. Returns an empty
 // string and sets `error` if the files cannot be written.
 std::string capture_preset_path(bool shader_model_3, std::string &error);

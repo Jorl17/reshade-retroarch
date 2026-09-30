@@ -19,12 +19,12 @@
 struct PixelGrid
 {
     // True when the fields below describe a usable grid. When false, ignore them (a
-    // rejected detection may leave its best guess in them).
+    // rejected detection may leave its best candidate in them).
     bool valid = false;
     int native_w = 0, native_h = 0;             // native resolution: size of the small picture, in its own pixels
     int rect_x = 0, rect_y = 0, rect_w = 0, rect_h = 0; // rectangle of the frame, in frame pixels, the picture was stretched over
     float match = 0.0f;                         // validation score, 0..1: share of checked pixels equal to their cell's centre pixel
-    // Whether the rectangle's edges are known to be the picture's real edges. When false,
+    // Whether the rectangle's edges were found to be the picture's real edges. When false,
     // the grid may be only the visible part of a larger picture, for example the strip of
     // gameplay left showing beside a menu drawn over the game.
     bool bounded = false; // true if it is the whole frame, or fits the content between uniform bars (plain borders)
@@ -70,8 +70,8 @@ inline int cell_centre(int origin, int extent, int count, int i)
 // as a title card or a pause menu. Returns false if either grid is not valid.
 bool part_of(const PixelGrid &piece, const PixelGrid &whole);
 
-// Looks at one frame and returns where the game's native picture sits in it and at what
-// resolution. It expects a picture stretched with nearest-neighbour sampling (each native
+// Analyses one frame and returns where the game's native picture sits in it and at what
+// resolution. It works on a picture stretched with nearest-neighbour sampling (each native
 // pixel copied into a solid block of frame pixels), optionally with softened block edges
 // as "sharp bilinear" filters make. Returns a grid with valid == false when the frame does
 // not look like that (menus drawn at full resolution, smooth upscales, blank frames), is

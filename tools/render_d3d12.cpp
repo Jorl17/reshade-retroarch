@@ -79,8 +79,8 @@ struct Gpu
         return true;
     }
 
-    // Creates a `w` x `h` 8-bit RGBA texture in `state`, allowed as a render target when
-    // `render_target`.
+    // Creates a `w` x `h` 8-bit RGBA texture in `state`, usable as a render target when
+    // `render_target` is set.
     ComPtr<ID3D12Resource> texture(UINT w, UINT h, bool render_target, D3D12_RESOURCE_STATES state)
     {
         D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
@@ -165,7 +165,7 @@ bool render_d3d12(std::vector<uint8_t> &rgba, UINT w, UINT h, const PixelGrid &g
     const UINT nw = UINT(grid.native_w), nh = UINT(grid.native_h), rw = UINT(grid.rect_w), rh = UINT(grid.rect_h);
 
     // The frame (the add-on's snapshot), the native picture and the preset's output, with
-    // the views librashader is given, as in FrameRenderer.
+    // the views passed to librashader, as in FrameRenderer.
     ComPtr<ID3D12Resource> frame = gpu.texture(w, h, false, D3D12_RESOURCE_STATE_COPY_DEST);
     ComPtr<ID3D12Resource> native = gpu.texture(nw, nh, true, kRead);
     ComPtr<ID3D12Resource> out = gpu.texture(rw, rh, true, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -209,7 +209,7 @@ bool render_d3d12(std::vector<uint8_t> &rgba, UINT w, UINT h, const PixelGrid &g
         return false;
     }
 
-    // The capture preset, given the grid (as FrameRenderer::set_capture_grid), and the preset.
+    // The capture preset, with the grid set (as FrameRenderer::set_capture_grid), and the preset.
     const ChainDevice dev = {GraphicsApi::d3d12, reinterpret_cast<uint64_t>(gpu.device.Get())};
     ShaderChain capture, chain;
     const std::string capture_path = capture_preset_path(false, error);

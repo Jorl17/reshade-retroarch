@@ -17,20 +17,20 @@
 //                                   FAIL for each, exits 1 if any failed (0 otherwise)
 //   detect_test <image.png>         prints the grid it detects in that image, the
 //                                   detector's diagnosis and the time taken
-//   detect_test --rules             checks part_of, the rule deciding which detections are
+//   detect_test --rules             checks part_of, the rule that sets which detections are
 //                                   only a piece of the grid in use (built-in cases)
 //
 // Manifest lines (tests/make_synthetic.py writes them; lines starting with '#' are skipped):
 //   <valid> <native_w> <native_h> <rect_x> <rect_y> <rect_w> <rect_h> <file>
 // <file> is relative to the manifest's folder unless it starts with a drive letter, and
 // may contain spaces (it is the rest of the line). The numbers describe the expected
-// grid. <valid> says what counts as a pass:
+// grid. <valid> defines what counts as a pass:
 //   0 = the detector must find no grid (e.g. a smoothly upscaled or blank frame).
 //   1 = it must find exactly that grid.
 //   2 = exactly that grid, or no grid; any other grid fails (e.g. HD menus over gameplay).
-//   3 = no grid, or an unbounded piece of that grid. The add-on never lets such a piece
-//       replace the grid in use (title cards and menus over dark screens).
-//   4 = exactly that grid, and bounded (so the add-on may let it replace a larger grid).
+//   3 = no grid, or an unbounded piece of that grid. The add-on never replaces the grid in
+//       use with such a piece (title cards and menus over dark screens).
+//   4 = exactly that grid, and bounded (so the add-on can use it in place of a larger grid).
 
 #include "../src/grid_detect.h"
 #include "png_io.h"

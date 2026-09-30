@@ -2,8 +2,8 @@
 
 // UTF-8 <-> path conversions that never throw. std::filesystem's u8path and
 // u8string throw on invalid input (a hand-edited file saved as ANSI, a stray
-// surrogate in a file name), and an exception escaping into ReShade's present
-// call takes the game down with it.
+// surrogate in a file name), and an exception thrown into ReShade's present call
+// ends the game's process.
 
 #include <windows.h>
 
@@ -23,7 +23,7 @@ inline std::filesystem::path path_from_utf8(const std::string &s)
 }
 
 // Returns path `p` as UTF-8 text, with backslashes, or with forward slashes when
-// `generic` is set (as .slangp files write paths). Unpaired surrogates become U+FFFD.
+// `generic` is set (the form used in .slangp files). Unpaired surrogates become U+FFFD.
 inline std::string utf8_from_path(const std::filesystem::path &p, bool generic = false)
 {
     std::wstring w = generic ? p.generic_wstring() : p.wstring();

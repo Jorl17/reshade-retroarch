@@ -12,7 +12,7 @@ libra_instance_t g_api = {}; // librashader's functions, filled by load()
 bool g_loaded = false;     // load() has succeeded
 
 // Returns, for the error message, which Microsoft runtimes librashader.dll needs that are
-// not installed: ": install ..." naming each package, or "" if none is missing. A DLL
+// not installed: ": install ..." listing each package, or "" if none is missing. A DLL
 // counts as installed if it is in `dll_dir` (librashader's folder, searched first for its
 // dependencies) or where Windows looks for DLLs (checked without running it).
 std::string missing_runtimes(const std::wstring &dll_dir)
@@ -41,9 +41,9 @@ bool libra::load(const std::wstring &dll_path, std::string &error)
     if (g_loaded)
         return true;
 
-    // librashader_load_instance() calls LoadLibraryW(L"librashader.dll"). Loading our
-    // copy by full path first makes that call return this module rather than
-    // whatever the DLL search order would find.
+    // librashader_load_instance() calls LoadLibraryW(L"librashader.dll"). Loading the
+    // add-on's copy by full path first makes that call return this module rather than
+    // the first librashader.dll in the DLL search order.
     if (LoadLibraryExW(dll_path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) == nullptr)
     {
         const DWORD code = GetLastError();
@@ -103,7 +103,7 @@ bool libra::load_d3d12_compiler(const std::wstring &addon_dir, std::string &erro
     static bool loaded = false;
     if (loaded)
         return true;
-    // dxil.dll first: dxcompiler.dll loads it by name, which then finds this copy.
+    // dxil.dll first: dxcompiler.dll loads it by name, and then gets this copy.
     for (const wchar_t *name : {L"dxil.dll", L"dxcompiler.dll"})
     {
         const std::wstring next_to_addon = addon_dir + L"\\" + name;

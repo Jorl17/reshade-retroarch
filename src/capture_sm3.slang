@@ -3,7 +3,7 @@
 // Capture pass for Direct3D 9: the same job as capture.slang (see there), written for
 // Shader Model 3, which has no integer arithmetic and no exact texel fetch. The cell
 // centre is computed in floating point and sampled with point filtering at the centre of
-// that frame pixel. Float division can land one frame pixel away from the exact integer
+// that frame pixel. Float division can give a frame pixel one away from the exact integer
 // result near a cell edge; that pixel is still inside the same cell (cells are at least 2
 // pixels wide), so for a nearest-neighbour or sharp stretch the colour is the same.
 

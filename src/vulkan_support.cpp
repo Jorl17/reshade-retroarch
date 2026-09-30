@@ -90,8 +90,9 @@ bool vulkan_handles(const uint8_t *luid, uint32_t queue_flags, VulkanHandles &ou
     }
 
     // The game's queue family: the only one whose capabilities are exactly the queue's. On
-    // the GPUs seen so far every family has a different set, so this identifies it; if two
-    // families had the same set, the queue could be in either, so give up rather than guess.
+    // the GPUs tested so far every family has a different set, so this identifies it; if two
+    // families had the same set, the queue could be in either, so return an error instead
+    // of picking one.
     uint32_t nfam = 0;
     families(found, &nfam, nullptr);
     std::vector<VkQueueFamilyProperties> fam(nfam);
@@ -106,7 +107,7 @@ bool vulkan_handles(const uint8_t *luid, uint32_t queue_flags, VulkanHandles &ou
     if (matches != 1)
     {
         error = matches == 0 ? "could not find the queue family of the game's Vulkan queue"
-                             : "cannot tell which queue family the game's Vulkan queue is in (several have the same "
+                             : "the game's Vulkan queue could be in several queue families (they have the same "
                                "capabilities)";
         return false;
     }

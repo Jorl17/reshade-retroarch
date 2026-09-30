@@ -63,7 +63,8 @@ std::string capture_preset_path(bool shader_model_3, std::string &error)
         error = "no temporary folder for the capture shader";
         return {};
     }
-    // Folder named after the content: an older version's files are never reused.
+    // The folder name includes a hash of the content: an older version's files are never
+    // reused.
     const size_t hash = std::hash<std::string>()(slang + slangp);
     const fs::path dir = fs::path(tmp) / (L"reshade-retroarch-capture-" + std::to_wstring(hash));
     std::error_code ec;

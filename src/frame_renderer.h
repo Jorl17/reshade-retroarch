@@ -22,21 +22,21 @@
 //     (capture.h), run the user's preset on it, and copy the result into the frame over
 //     the game picture's rectangle. Pixels outside that rectangle are never touched.
 //
-// Resource states (how the GPU is told a texture will be used next; required on D3D12
-// and Vulkan, ignored elsewhere): between calls the snapshot and the native picture are in
-// the shader_resource state and the output texture in copy_source; the frame is expected
-// in render_target (as during ReShade's effect rendering) and left there.
+// Resource states (the declared next use of a texture; required on D3D12 and Vulkan,
+// ignored elsewhere): between calls the snapshot and the native picture are in the
+// shader_resource state and the output texture in copy_source; the frame must be in
+// render_target (as during ReShade's effect rendering) and is left there.
 //
 // Where librashader records its work:
 //  - Direct3D 11, Direct3D 9 and OpenGL: straight on ReShade's command list (on Direct3D 11
 //    ReShade restores the game's state afterwards). On Direct3D 9, librashader begins and
-//    ends a scene around each of its draws, which Direct3D 9 refuses inside another scene,
-//    and ReShade (6.8) renders effects inside a scene of its own: that scene is closed for
-//    librashader's work and opened again afterwards.
+//    ends a scene around each of its draws, which Direct3D 9 does not allow inside another
+//    scene, and ReShade (6.8) renders effects inside a scene of its own: that scene is
+//    closed for librashader's work and opened again afterwards.
 //  - Direct3D 12 and Vulkan: on a private command list (a Vulkan command buffer), submitted
 //    to the same queue right after ReShade's pending commands. On Direct3D 12 because
-//    librashader binds its own descriptor heaps, and ReShade (6.8) assumes its own stay
-//    bound on its command list. On Vulkan because librashader's calls go through ReShade's
+//    librashader binds its own descriptor heaps, and ReShade (6.8) does not bind its own
+//    again on its command list. On Vulkan because librashader's calls go through ReShade's
 //    Vulkan layer like the game's, and ReShade (6.8) does not register its own command
 //    buffers with that layer: commands recorded on them would reach other add-ons'
 //    handlers with no command list (a crash in ReShade's built-in depth add-on, for one).
@@ -54,8 +54,8 @@ public:
     FrameRenderer &operator=(const FrameRenderer &) = delete;
     ~FrameRenderer(); // calls shutdown()
 
-    // Fills `out` with what librashader needs to know about `device` and `queue`, the queue
-    // the add-on renders on (its API, native device, and on Vulkan the objects of
+    // Fills `out` with the information librashader takes about `device` and `queue`, the
+    // queue the add-on renders on (its API, native device, and on Vulkan the objects of
     // vulkan_support.h). Returns false and sets `error` (a message for the user) when the
     // device's graphics API is not supported (yet) or, on Vulkan, those objects cannot be
     // found.
@@ -67,7 +67,7 @@ public:
     // Releases anything from an earlier init() first. Returns false and sets `error` on
     // failure.
     bool init(reshade::api::device *device, reshade::api::command_queue *queue, std::string &error);
-    // Releases every GPU object and forgets the device. Safe to call more than once.
+    // Releases every GPU object and clears the device. Safe to call more than once.
     void shutdown();
     // Waits until the GPU has finished all work submitted to the renderer's queue. Call it
     // before destroying or replacing a ShaderChain the renderer has drawn with: Direct3D 12
@@ -86,10 +86,11 @@ public:
     // snapshot(), in the render_target state): rebuilds the native picture described by
     // `grid` from the last snapshot, runs `chain` on it into a texture the size of grid's
     // rectangle, and copies that into `dst` at the rectangle's position. `frame_count` is
-    // the frame number the shaders see; it should go up by one each frame. Records the
-    // commands on `cmd`, which must be `queue`'s immediate command list on Direct3D 12 and
-    // Vulkan (see the class comment). Returns false and sets `error` when there is no snapshot,
-    // `grid` is invalid or reaches outside the snapshot, or a texture or a preset fails.
+    // the frame number passed to the shaders; it should go up by one each frame. Records
+    // the commands on `cmd`, which must be `queue`'s immediate command list on Direct3D 12
+    // and Vulkan (see the class comment). Returns false and sets `error` when there is no
+    // snapshot, `grid` is invalid or reaches outside the snapshot, or a texture or a preset
+    // fails.
     bool render(reshade::api::command_list *cmd, reshade::api::command_queue *queue, const PixelGrid &grid,
                 ShaderChain &chain, reshade::api::resource dst, uint64_t frame_count, std::string &error);
 
@@ -155,7 +156,7 @@ private:
 
     reshade::api::device *device_ = nullptr; // from init(); not owned
     ChainDevice chain_device_;
-    // The capture preset compiled for the device, and the grid it was last given.
+    // The capture preset compiled for the device, and the grid last passed to it.
     ShaderChain capture_;
     PixelGrid capture_grid_;
 

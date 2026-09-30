@@ -49,8 +49,8 @@ std::string read(const fs::path &p)
     return std::string(std::istreambuf_iterator<char>(in), {});
 }
 
-// True when `a` and `b` name the same file on disk (after following links); false if
-// they differ or either does not exist.
+// True when `a` and `b` are paths to the same file on disk (after following links); false
+// if they differ or either does not exist.
 bool same(const fs::path &a, const fs::path &b)
 {
     std::error_code ec;
@@ -75,9 +75,10 @@ int main()
     write(geom, "shaders = 0\n");
     fs::path target;
 
-    // read_reference(companion, target) finds the preset a companion refers to. It must
-    // read the file the way librashader does: the path may be quoted or not, lines may
-    // end in CRLF, commented-out lines do not count, and a malformed file must not throw.
+    // read_reference(companion, target) reads the preset path on a companion's #reference
+    // line. It must read the file the way librashader does: the path may be quoted or
+    // not, lines may end in CRLF, commented-out lines do not count, and reading a
+    // malformed file must not throw.
     const fs::path c = presets / L"CRT.slangp";
     write(c, "#reference \"../retroarch-shaders/crt/crt-royale.slangp\"\r\nfoo = \"1.0\"\r\n");
     check(read_reference(c, target) && same(target, royale), "quoted relative reference, CRLF");
@@ -124,16 +125,16 @@ int main()
     check(!fs::exists(c.wstring() + L".tmp"), "no temporary file left behind");
 
     // set_aside(file, error) renames a file to "<file>.removed", or "<file>.removed.2",
-    // ... if that name is taken, so an earlier backup is never overwritten. (The add-on
-    // uses it when a companion is removed, instead of deleting a file the user may have
-    // written by hand.) It must report an error when the file does not exist.
+    // ... if that file exists, so an earlier backup is never overwritten. (The add-on uses
+    // it when a companion is removed, instead of deleting a file the user may have written
+    // by hand.) It must return an error when the file does not exist.
     write(c, "first");
     check(set_aside(c, err) && read(c.wstring() + L".removed") == "first", "set aside to .removed");
     write(c, "second");
     check(set_aside(c, err) && read(c.wstring() + L".removed") == "first" &&
               read(c.wstring() + L".removed.2") == "second",
           "second set aside keeps the first backup");
-    check(!set_aside(c, err) && !err.empty(), "set aside of a missing file reports an error");
+    check(!set_aside(c, err) && !err.empty(), "set aside of a missing file returns an error");
 
     // scan_presets(roots, cancel, skipped) lists every .slangp under the given folders.
     // Checks: it searches subfolders at any depth and matches the extension in any case;

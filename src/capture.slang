@@ -3,8 +3,8 @@
 // Capture pass: rebuilds a game's native-resolution picture from the frame the game
 // presented. Written in RetroArch's shader language (slang) so that librashader
 // compiles it for every graphics API; the add-on runs it as a one-pass shader preset
-// (capture.slangp) whose output is the native picture, which then feeds the user's
-// RetroArch preset.
+// (capture.slangp) whose output is the native picture, which is then the input of the
+// user's RetroArch preset.
 //
 // Input ("Source"): the whole frame, as the game drew it.
 // Output: one pixel per native pixel (the output size is the native resolution).

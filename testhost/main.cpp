@@ -16,12 +16,12 @@
 //                    size; other frames are black)
 // --resize F:WxH     at frame F, resize the back buffer (a game switching resolution)
 // --selfshot F:path  at frame F, save the back buffer as drawn by the host itself,
-//                    before ReShade: proves the host shows the picture unchanged
+//                    before ReShade, to check that the host shows the picture unchanged
 // --warp 1           software rendering (Direct3D only)
 // --adapter N        Direct3D 11: render on GPU number N (DXGI's numbering, 0 = the default)
 //                    instead of the default one; the chosen GPU's name is printed
 //
-// Exit codes: 0 ok, 1 error, 3 the API cannot do what was asked (format, HDR10).
+// Exit codes: 0 ok, 1 error, 3 the API cannot provide the requested format or HDR10.
 // To test ReShade, put ReShade (named as the API's DLL, e.g. d3d11.dll) and the
 // add-ons next to this executable. The graphics API DLLs are delay-loaded, so only the
 // one in use is loaded, as in a real game. The per-API drawing code is in the backend
@@ -153,7 +153,8 @@ int wmain(int argc, wchar_t **argv)
     }
 
     // Pictures by file name, loaded on first use. Backends cache their GPU copy per
-    // Image address, so an Image must stay at the same address: std::map guarantees it.
+    // Image address, so an Image must stay at the same address, as elements of a
+    // std::map do.
     std::map<std::wstring, Image> images;
     auto load = [&](const std::wstring &path) -> const Image * {
         if (auto it = images.find(path); it != images.end())

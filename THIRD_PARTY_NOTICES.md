@@ -19,8 +19,8 @@ repository they sit next to each component in `third_party/`.
   which does not compile when Direct3D 9 support is enabled; the two lines are removed
   (marked "reshade-retroarch patch" in the file).
 
-The add-on loads `librashader.dll` at run time through `librashader_ld.h`, as the librashader
-README recommends for projects that are not MPL-2.0 themselves. You may replace
+The add-on loads `librashader.dll` at run time through `librashader_ld.h`, as recommended in
+librashader's README for projects that are not MPL-2.0 themselves. You may replace
 `librashader.dll` with any compatible build, including one you compile yourself.
 
 ## ReShade add-on headers

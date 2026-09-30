@@ -49,9 +49,9 @@ void write(const fs::path &p, const std::string &text)
     std::ofstream(p, std::ios::binary) << text;
 }
 
-// Returns the value each parameter gets when `preset` is loaded (the value set by the
-// preset or a preset it references, else the shader's default), by parameter name.
-// Returns an empty map, after printing why, if the preset cannot be read.
+// Returns each parameter's value when `preset` is loaded (the value set in the preset or
+// in a preset on its #reference lines, else the shader's default), by parameter name.
+// Returns an empty map, after printing the reason, if the preset cannot be read.
 std::map<std::string, float> values(const fs::path &preset)
 {
     std::vector<ShaderParam> params;
@@ -124,16 +124,16 @@ int wmain(int argc, wchar_t **argv)
     const fs::path companion = dir / L"CRT.slangp";
     write(companion, "#reference \"mid.slangp\"\nalpha = \"0.125\"\n");
 
-    // Reading: each preset gives the values of the nearest preset that sets them.
+    // Reading: each preset has the values of the nearest preset that sets them.
     const auto base = values(dir / L"base.slangp"), mid = values(dir / L"mid.slangp"), comp = values(companion);
     check(base.size() == 2 && close_to(base.at("alpha"), 0.5f) && close_to(base.at("beta"), 2.0f), "shader defaults");
     check(mid.size() == 2 && close_to(mid.at("alpha"), 0.25f) && close_to(mid.at("beta"), 2.0f), "one level of overrides");
-    check(comp.size() == 2 && close_to(comp.at("alpha"), 0.125f), "the last override wins (not the deepest)");
-    check(comp.size() == 2 && close_to(comp.at("beta"), 2.0f), "parameters nobody sets keep the shader default");
+    check(comp.size() == 2 && close_to(comp.at("alpha"), 0.125f), "the last override is used (not the deepest)");
+    check(comp.size() == 2 && close_to(comp.at("beta"), 2.0f), "parameters no preset sets keep the shader default");
 
     // Saving. `current` stands for the sliders in the add-on's window: the companion's
     // parameters, whose `value` the test changes. `mid_params` are the parameters of the
-    // preset the companion references. param_overrides(current, mid_params) returns what
+    // preset on the companion's #reference line. param_overrides(current, mid_params) returns what
     // Save would write: every parameter whose value differs from the referenced preset's.
 
     // Save without touching anything: only the companion's own override is kept.
@@ -152,7 +152,7 @@ int wmain(int argc, wchar_t **argv)
     check(write_companion(companion, dir / L"mid.slangp", true, param_overrides(current, mid_params), err),
           "write the companion");
     const auto saved = values(companion);
-    check(saved.size() == 2 && close_to(saved.at("alpha"), 0.125f) && close_to(saved.at("beta"), 3.0f), "values survive a reload");
+    check(saved.size() == 2 && close_to(saved.at("alpha"), 0.125f) && close_to(saved.at("beta"), 3.0f), "values are kept after a reload");
 
     // Save again with nothing changed: nothing is lost.
     read_preset_params(utf8_from_path(companion), current, err);
@@ -168,7 +168,7 @@ int wmain(int argc, wchar_t **argv)
 
     std::vector<ShaderParam> none;
     check(!read_preset_params(utf8_from_path(dir / L"missing.slangp"), none, err) && !err.empty(),
-          "a missing preset reports an error");
+          "a missing preset returns an error");
 
     // Presets given on the command line: each must parse and have parameters.
     for (int a = 1; a < argc; ++a)

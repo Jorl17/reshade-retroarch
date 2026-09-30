@@ -4,7 +4,7 @@
 
 For each API and back buffer format the host draws the same pictures, reads its own
 back buffer (no ReShade involved) and the result must equal the picture byte for byte.
-Combinations an API cannot do must be reported as unsupported (exit code 3), not fail.
+Combinations an API cannot provide must be reported as unsupported (exit code 3), not fail.
 --warp also runs the Direct3D hosts on the software rasterizer (as on machines without
 a GPU); --warp-only runs just those (for CI, which has no GPU).
 """
@@ -30,7 +30,7 @@ SUPPORTED = {
     ("opengl", "rgba8", False),
     ("vulkan", "rgba8", False),
 }
-# Depends on the display and driver (formats a Vulkan surface offers, HDR being on):
+# Depends on the display and driver (formats a Vulkan surface supports, HDR being on):
 # must either work byte for byte or report unsupported.
 OPTIONAL = {("vulkan", "rgba8srgb", False), ("vulkan", "rgb10a2", False), ("vulkan", "rgb10a2", True)}
 APIS = ["d3d9", "d3d10", "d3d11", "d3d12", "opengl", "vulkan"]

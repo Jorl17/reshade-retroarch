@@ -46,7 +46,7 @@ enum NativeMode : int
 {
     native_auto = 0,   // "Detect automatically": GridDetector (detector.h) finds the grid
     native_manual = 1, // "Fixed": the whole frame, as manual_w x manual_h original pixels
-    native_frame = 2,  // "Whole frame": nothing is recovered; the preset gets the full frame as is
+    native_frame = 2,  // "Whole frame": nothing is recovered; the preset runs on the full frame as is
 };
 
 // Settings shared by every game window, stored in the global ReShade.ini, section
@@ -65,7 +65,8 @@ struct Settings
 // swap chain or the graphics device is really destroyed.
 struct RuntimeData
 {
-    // Graphics device of the runtime; on_destroy_device removes the entry when it goes away.
+    // Graphics device of the runtime; on_destroy_device removes the entry when the device is
+    // destroyed.
     device *dev = nullptr;
     // The swap chain's native handle (the IDXGISwapChain pointer): the key into g_swapchains,
     // and how on_destroy_swapchain finds the entry.
@@ -112,7 +113,7 @@ struct RuntimeData
 
 // One background search for RetroArch presets: the thread finds the shader folders
 // (find_shader_roots) and every .slangp in them (scan_presets), both in discovery.h, then sets
-// `done`. Setting `cancel` asks it to stop early. start_scan() creates it and poll_scan() takes
+// `done`. Setting `cancel` makes it stop early. start_scan() creates it and poll_scan() takes
 // the results. It is only ever reached through the g_scan pointer and never destroyed by a
 // static destructor, so if the game exits without unloading add-ons it is simply leaked:
 // destroying a still-running std::thread in a static destructor terminates or hangs the process.
@@ -279,8 +280,8 @@ bool poll_scan()
     return false;
 }
 
-// Asks the running preset search, if any, to stop, waits for its thread to end and frees it,
-// discarding its results. Used when the add-on unloads.
+// Sets the running preset search's `cancel` flag, if there is a search, waits for its thread
+// to end and frees it, discarding its results. Used when the add-on unloads.
 void stop_scan()
 {
     if (g_scan == nullptr)
@@ -330,8 +331,8 @@ void set_preset_path(RuntimeData &rd, const char *path)
     refresh_companion(rd);
 }
 
-// Asks ReShade which preset `runtime` has selected and, if it is not the one recorded in rd,
-// switches to it (set_preset_path). Called every frame: ReShade reports preset switches made
+// Gets from ReShade the preset selected in `runtime` and, if it is not the one recorded in
+// rd, switches to it (set_preset_path). Called every frame: ReShade reports preset switches made
 // with its keys and overlay through an event (on_set_current_preset_path), but not ones made
 // by other add-ons through its API, and this check is cheap.
 void poll_preset_path(effect_runtime *runtime, RuntimeData &rd)
@@ -384,8 +385,8 @@ void on_init_effect_runtime(effect_runtime *runtime)
         rd = std::make_unique<RuntimeData>();
     rd->dev = runtime->get_device();
     rd->native = runtime->get_native();
-    // ReShade reloads all effects after every init (also after a resize); give it time
-    // before concluding that effects are not being rendered.
+    // ReShade reloads all effects after every init (also after a resize); the "Paused"
+    // status waits for that (see on_reshade_present).
     rd->created = now_seconds();
     rd->warned_paused = false;
     char path[4096] = "";
@@ -399,7 +400,7 @@ void on_init_effect_runtime(effect_runtime *runtime)
 // staging texture (a GPU texture the CPU can read) that holds it; that must happen while the
 // device context still exists. The rest of the runtime's data (the detected grid, the
 // compiled shader) is kept for when the runtime is initialised again; on_destroy_swapchain
-// and on_destroy_device remove it when the swap chain or device really goes away.
+// and on_destroy_device remove it when the swap chain or device is really destroyed.
 void on_destroy_effect_runtime(effect_runtime *runtime)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -440,8 +441,8 @@ void on_init_swapchain(swapchain *sc, bool)
 // ReShade event: a swap chain is being resized (`resize` true) or destroyed. Removes it from
 // g_swapchains; after a resize, on_init_swapchain adds it back. When it is destroyed, also
 // removes the data of its effect runtime. ReShade raises this after destroy_effect_runtime
-// and deletes the runtime object right after it, so the data has to go now: a later runtime
-// may even get the same address and must not inherit it.
+// and deletes the runtime object right after it, so the data is removed now: a later
+// runtime may be created at the same address and must not be matched to this data.
 void on_destroy_swapchain(swapchain *sc, bool resize)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -454,7 +455,7 @@ void on_destroy_swapchain(swapchain *sc, bool resize)
 }
 
 // Returns true if the swap chain of `runtime` outputs HDR (colour space scRGB, HDR10 PQ or
-// HDR10 HLG), false if it outputs SDR or its swap chain is not known. The caller must hold
+// HDR10 HLG), false if it outputs SDR or its swap chain is not recorded. The caller must hold
 // g_mutex.
 bool hdr_output(effect_runtime *runtime)
 {
@@ -494,8 +495,8 @@ void on_set_current_preset_path(effect_runtime *runtime, const char *path)
 // Gets everything ready to render for rd on device `dev`, rendering on `queue`, doing only
 // what is not done yet: loads librashader.dll from the add-on's folder, sets up the
 // renderer, and compiles the companion .slangp into rd.chain when it is new, changed on
-// disk, or a button asked for it. Returns true when a compiled shader is ready; false when
-// there is nothing to render with, normally with rd.error saying why.
+// disk, or a button was pressed for it. Returns true when a compiled shader is ready; false
+// when there is nothing to render with, normally with the reason in rd.error.
 bool prepare(RuntimeData &rd, device *dev, command_queue *queue)
 {
     std::string err;
@@ -535,9 +536,10 @@ bool prepare(RuntimeData &rd, device *dev, command_queue *queue)
         }
         rd.renderer_ready = true;
     }
-    // Compile when a button asked for it, when the companion is a different file or version
-    // than the last attempt, or when it changed on disk and no chain is loaded. The attempt
-    // is recorded before compiling, so a preset that fails is not recompiled every frame.
+    // Compile when a button was pressed for it, when the companion is a different file or
+    // version than the last attempt, or when it changed on disk and no chain is loaded. The
+    // attempt is recorded before compiling, so a preset that fails is not recompiled every
+    // frame.
     if (rd.force_reload || rd.chain_source != rd.companion || rd.chain_mtime != rd.companion_mtime ||
         (rd.retry && !rd.chain.ready()))
     {
@@ -577,8 +579,8 @@ bool prepare(RuntimeData &rd, device *dev, command_queue *queue)
 // effects then run on top. `cmd_list` is the command list to record the work on.
 // The frame is left untouched when the ReShade preset has no companion .slangp, the game's
 // graphics API is not supported, the output is HDR, the shader cannot be loaded, or (in
-// automatic mode) no pixel grid has been found yet. Sets rd's status or error to say what
-// happened.
+// automatic mode) no pixel grid has been found yet. Sets rd's status or error to describe
+// what happened.
 void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_view rtv, resource_view)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -608,7 +610,7 @@ void on_begin_effects(effect_runtime *runtime, command_list *cmd_list, resource_
     }
     const bool ready = prepare(*rd, dev, runtime->get_command_queue());
     // Compiling a preset in prepare() can take seconds. Count effects as rendered when it
-    // ends, or on_reshade_present, right after, would take the compile for a pause.
+    // ends, or on_reshade_present, right after, would show "Paused" because of the compile.
     rd->last_effects = now_seconds();
     if (!ready)
         return;
@@ -703,8 +705,8 @@ void on_reshade_present(effect_runtime *runtime)
     // ReShade only calls reshade_begin_effects when it has effects to render: effects are
     // switched on and at least one effect file is loaded (the add-on ships a hidden
     // placeholder, RetroArchShaders.fx, for that). If it has not been called for 2 seconds,
-    // and the runtime has had 5 seconds to load its effects, explain why nothing happens,
-    // and log that once.
+    // and the runtime has had 5 seconds to load its effects, show the reason as the status,
+    // and log it once.
     if (t - rd->last_effects > 2.0 && t - rd->created > 5.0)
     {
         rd->status = "Paused: ReShade is not rendering effects. They may be switched off (Effect toggle key), or no "
@@ -727,10 +729,9 @@ void on_reshade_present(effect_runtime *runtime)
 
 // Returns true if the preset file `target` is inside the game's folder or the add-on's
 // folder (compared case-insensitively, with links and ".." replaced by the real folders
-// where possible). The
-// companion .slangp then refers to it with a relative path, so the folder can be moved
-// with its shaders. Presets in shared places, such as a RetroArch install, get an absolute
-// path instead, so the .slangp still works when copied to another game.
+// where possible). The companion .slangp then holds a relative path to it, so the folder
+// can be moved with its shaders. Presets in shared places, such as a RetroArch install, get
+// an absolute path instead, so the .slangp still works when copied to another game.
 bool reference_relative(const fs::path &target)
 {
     // A path's comparable form: the real path of as much of it as exists, in lower case.
@@ -867,9 +868,9 @@ void draw_shader_picker(RuntimeData &rd)
 
 // Draws the overlay's "Game resolution" section: the three modes (see NativeMode), the
 // width and height for "Fixed" (kept within 16..7680 x 16..4320), and in automatic mode the
-// detector's state and a "Detect again" button that makes it forget the grid and search
-// again. Writes the settings to ReShade.ini when any of them changed. The settings are
-// global: they apply to every game window at once.
+// detector's state and a "Detect again" button that clears its grid and searches again.
+// Writes the settings to ReShade.ini when any of them changed. The settings are global:
+// they apply to every game window at once.
 void draw_resolution(RuntimeData &rd)
 {
     bool changed = false;
@@ -898,11 +899,11 @@ void draw_resolution(RuntimeData &rd)
         save_settings();
 }
 
-// Saves the current slider values into the companion .slangp. `target` is the preset the
-// companion already refers to. The file is rewritten as a reference to `target` plus every
-// parameter whose current value differs from the value `target` itself gives it: values
-// saved earlier are kept (they still differ), and parameters left at the preset's value
-// stay out of the file. The rewritten file has a new modification time, so the next frame
+// Saves the current slider values into the companion .slangp. `target` is the preset on the
+// companion's #reference line. The file is rewritten as a reference to `target` plus every
+// parameter whose current value differs from its value in `target`: values saved earlier
+// are kept (they still differ), and parameters left at the preset's value stay out of the
+// file. The rewritten file has a new modification time, so the next frame
 // compiles it again. On failure, sets rd.action_error.
 void save_parameters(RuntimeData &rd, const fs::path &target)
 {
@@ -940,7 +941,7 @@ void draw_parameters(RuntimeData &rd)
         ImGui::TextDisabled("This preset has no parameters.");
     // Parameters whose range is empty get no slider. A moved slider is snapped to the
     // parameter's step and applied to the chain. Hovering shows the parameter's internal
-    // name and its saved value (the one the .slangp gives it, or the shader's default).
+    // name and its saved value (the value in the .slangp, or the shader's default).
     for (const ShaderParam &p : params)
     {
         float v = p.value;
@@ -1009,9 +1010,9 @@ void draw_overlay(effect_runtime *runtime)
 }
 } // namespace
 
-// Called by ReShade after it loads this DLL. Registers the add-on with ReShade (returns false,
-// and the add-on is not used, if ReShade refuses it), remembers the add-on's and the game's
-// folders, and subscribes the event handlers above and the overlay window.
+// Called by ReShade after it loads this DLL. Registers the add-on with ReShade (returns
+// false, and the add-on is not used, if the registration fails), stores the add-on's and the
+// game's folders, and subscribes the event handlers above and the overlay window.
 // ReShade calls AddonInit and AddonUninit outside DllMain, so not under the Windows loader
 // lock. That matters: AddonUninit waits for the grid detectors' and the scan's threads to
 // end, which could deadlock under that lock.
